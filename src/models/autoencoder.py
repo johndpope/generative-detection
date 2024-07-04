@@ -402,6 +402,8 @@ class PoseAutoencoder(AutoencoderKL):
                                             last_layer=self.get_last_layer(), split="train")            
             self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
+            
+            aeloss = torch.nan_to_num(aeloss)
             return aeloss
         # Train the discriminator
         if optimizer_idx == 1:
@@ -413,7 +415,8 @@ class PoseAutoencoder(AutoencoderKL):
                                                 last_layer=self.get_last_layer(), split="train")
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-            return discloss
+            aeloss = torch.nan_to_num(discloss)
+            return aeloss
     
     def validation_step(self, batch, batch_idx):
         
@@ -612,16 +615,7 @@ class PoseAutoencoder(AutoencoderKL):
         
         rgb_in_viz = self._rescale(rgb_in)
         rgb_gt_viz = self._rescale(rgb_gt)
-        # mask_gt_viz = mask_gt.to(self.device) if x_mask is not None else None
-       
-        #x_mask_2d_bbox_viz = mask_2d_bbox
-
-        # if mask_gt_viz is not None:
-        #     mask_gt_viz = mask_gt_viz.to(self.device)
-        #     # convert mask to float, 0.0, 1.0 if not already
-        #     if mask_gt_viz.dtype != torch.float32:
-        #         mask_gt_viz = mask_gt_viz.float()
-            
+        
         if not only_inputs:
             # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
             
@@ -651,21 +645,79 @@ class PoseAutoencoder(AutoencoderKL):
         log["inputs_rgb_in"] = rgb_in_viz.clone().detach()
         log["inputs_rgb_gt"] = rgb_gt_viz.clone().detach()
 
-        # # plot inputs_rgb where mask_2d_bbox is 1
-        # if x_mask_2d_bbox is not None:
-        #     x_mask_2d_bbox = x_mask_2d_bbox.to(self.device) # size: torch.Size([12, 1, 256, 256])
-        #     # add batch dim if not present
-        #     x_mask_2d_bbox = x_mask_2d_bbox.unsqueeze(0) if x_mask_2d_bbox.dim() == 3 else x_mask_2d_bbox
-        #     x_mask_2d_bbox = x_mask_2d_bbox.expand(-1, 3, -1, -1)
-        #     log["inputs_rgb_mask_2d_bbox"] = x_rgb * x_mask_2d_bbox
+        with self.ema_scope():
+            ema_namespace = "_ema"
+            # repeat the same as above but with "_ema" prefix
+            
+            if not only_inputs:
+                
+                # Run full forward pass
+                xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, second_pose=second_pose) # torch.Size([3, 13])
+                xrec, poserec, posterior_obj, bbox_posterior = self.forward(rgb_gt)
+                # xrec_perturbed_pose = self._perturbed_pose_forward(posterior_obj, poserec, batch) #torch.Size([4, 3, 256, 256])
+                
+                xrec_rgb = xrec[:, :3, :, :] # torch.Size([8, 3, 64, 64])
+                xrec_rgb_2 = xrec_2[:, :3, :, :] # torch.Size([8, 3, 64, 64])
+                # xrec_perturbed_pose_rgb = xrec_perturbed_pose[:, :3, :, :] # torch.Size([4, 3, 256, 256])
+                
+                if rgb_in_viz.shape[1] > 3:
+                    # colorize with random projection
+                    assert xrec_rgb.shape[1] > 3
+                    rgb_in_viz = self.to_rgb(rgb_in_viz)
+                    rgb_gt_viz = self.to_rgb(rgb_gt_viz)
+                    xrec_rgb = self.to_rgb(xrec_rgb)
+                    xrec_rgb_2 = self.to_rgb(xrec_rgb_2)
+                    # xrec_perturbed_pose_rgb = self.to_rgb(xrec_perturbed_pose_rgb)
+                    
+                # scale is 0, 1. scale to -1, 1
+                log["reconstructions_rgb" + ema_namespace] = xrec_rgb.clone().detach()
+                log["reconstructions_rgb_2" + ema_namespace] = xrec_rgb_2.clone().detach()
+                # log["perturbed_pose_reconstruction_rgb"] = xrec_perturbed_pose_rgb.clone().detach()
+        
+
+        # test different x and y values in range -1, 1 (along a diagonal)
+        x = torch.linspace(-1, 1, steps=5) # torch.Size([5])
+        y = torch.linspace(-1, 1, steps=5) # torch.Size([5])
+
+        # poses - (-1, 0), (-0.5, 0), (0, 0), (0.5, 0), (1, 0)
+        # (0, -1), (0, -0.5), (0, 0), (0, 0.5), (0, 1)
+        second_pose_xy_list = []
+        for i in range(5):
+            for j in range(5):
+                second_pose_xy_list.append(torch.tensor([x[i], y[j]]))
+        second_pose_xy = torch.stack(second_pose_xy_list).to(self.device) # torch.Size([25, 2])
+        # replace the x and y values in the second pose with the new values
+        second_pose = second_pose.clone() # torch.Size([3, 13])
+        second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
+        batch_size = len(second_pose)
+        num_poses = second_pose_xy.shape[0]
+        # create tensor of dim 0 = 25 containing the second pose with the xy values in second_pose_xy
+        second_pose = second_pose.repeat(num_poses, 1, 1).permute(1, 0, 2) # torch.Size([3, 25, 13])
+        
+        # torch.Size([3, 25, 13])
+        second_pose[:, :, :2] = second_pose_xy # torch.Size([25, 13])
+        # second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
+        second_pose = second_pose.reshape(num_poses, batch_size, -1)
+        for idx, snd_pose in enumerate(second_pose):
+            # torch.Size([1, 4])
+            snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
+            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, second_pose=snd_pose)
+            xrec_rgb_2 = xrec_2[:, :3, :, :]    
+
+            if rgb_in_viz.shape[1] > 3:
+                # colorize with random projection
+                assert xrec_rgb_2.shape[1] > 3
+                xrec_rgb_2 = self.to_rgb(xrec_rgb_2)
+
+            log[f"reconstructions_rgb_2_{idx}"] = xrec_rgb_2.clone().detach()
 
         return log
     
     def _rescale(self, x):
         # scale is -1
+        x_min = 0.
+        x_max = 1.
         return 2. * (x - x.min()) / (x.max() - x.min()) - 1.
-        # x = torch.clamp(x, 0., 1.)
-        # return (2. * x) - 1.
     
     def to_rgb(self, x):
         if not hasattr(self, "colorize"):

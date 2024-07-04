@@ -107,6 +107,7 @@ class PoseEncoderSpatialVAE(nn.Module):
         
     
     def forward(self, z):
+        z = z.squeeze(0) if z.size(0) == 1 else z
         b = z.size(0) # 4
         x = self.x.expand(b, self.num_coords, self.in_dim).to(z) # (batch, num_coords, 2) 
         x = x.contiguous()
@@ -118,8 +119,10 @@ class PoseEncoderSpatialVAE(nn.Module):
         
         if len(z.size()) < 2:
             z = z.unsqueeze(0) # (1, 10)
-        h_z = self.latent_linear(z) # h_z torch.Size([4, 4]) = b, 4
+        h_z = self.latent_linear(z) # h_z torch.Size([4, 4]) = b, 4 # torch.Size([1, 3, 4])
         
+        # squeeze if ndims = 3 and 0th dim is len 1
+        h_z = h_z.squeeze(0) if h_z.size(0) == 1 else h_z
         # target size: # (4, 16, 16, 4). use tensor expand
         h_z = h_z.unsqueeze(1).expand(b, self.num_coords, self.feat_size) # (4, 256, 4)
         h_z = h_z.reshape(b, self.num_coords * self.feat_size) # (4, 1024)
