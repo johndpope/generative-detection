@@ -674,42 +674,42 @@ class PoseAutoencoder(AutoencoderKL):
                 log["reconstructions_rgb_2" + ema_namespace] = xrec_rgb_2.clone().detach()
                 # log["perturbed_pose_reconstruction_rgb"] = xrec_perturbed_pose_rgb.clone().detach()
         
+        with self.ema_scope():
+            # test different x and y values in range -1, 1 (along a diagonal)
+            x = torch.linspace(-1, 1, steps=5) # torch.Size([5])
+            y = torch.linspace(-1, 1, steps=5) # torch.Size([5])
 
-        # test different x and y values in range -1, 1 (along a diagonal)
-        x = torch.linspace(-1, 1, steps=5) # torch.Size([5])
-        y = torch.linspace(-1, 1, steps=5) # torch.Size([5])
+            # poses - (-1, 0), (-0.5, 0), (0, 0), (0.5, 0), (1, 0)
+            # (0, -1), (0, -0.5), (0, 0), (0, 0.5), (0, 1)
+            second_pose_xy_list = []
+            for i in range(5):
+                for j in range(5):
+                    second_pose_xy_list.append(torch.tensor([x[i], y[j]]))
+            second_pose_xy = torch.stack(second_pose_xy_list).to(self.device) # torch.Size([25, 2])
+            # replace the x and y values in the second pose with the new values
+            second_pose = second_pose.clone() # torch.Size([3, 13])
+            second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
+            batch_size = len(second_pose)
+            num_poses = second_pose_xy.shape[0]
+            # create tensor of dim 0 = 25 containing the second pose with the xy values in second_pose_xy
+            second_pose = second_pose.repeat(num_poses, 1, 1).permute(1, 0, 2) # torch.Size([3, 25, 13])
+            
+            # torch.Size([3, 25, 13])
+            second_pose[:, :, :2] = second_pose_xy # torch.Size([25, 13])
+            # second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
+            second_pose = second_pose.reshape(num_poses, batch_size, -1)
+            for idx, snd_pose in enumerate(second_pose):
+                # torch.Size([1, 4])
+                snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
+                xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, second_pose=snd_pose)
+                xrec_rgb_2 = xrec_2[:, :3, :, :]    
 
-        # poses - (-1, 0), (-0.5, 0), (0, 0), (0.5, 0), (1, 0)
-        # (0, -1), (0, -0.5), (0, 0), (0, 0.5), (0, 1)
-        second_pose_xy_list = []
-        for i in range(5):
-            for j in range(5):
-                second_pose_xy_list.append(torch.tensor([x[i], y[j]]))
-        second_pose_xy = torch.stack(second_pose_xy_list).to(self.device) # torch.Size([25, 2])
-        # replace the x and y values in the second pose with the new values
-        second_pose = second_pose.clone() # torch.Size([3, 13])
-        second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
-        batch_size = len(second_pose)
-        num_poses = second_pose_xy.shape[0]
-        # create tensor of dim 0 = 25 containing the second pose with the xy values in second_pose_xy
-        second_pose = second_pose.repeat(num_poses, 1, 1).permute(1, 0, 2) # torch.Size([3, 25, 13])
-        
-        # torch.Size([3, 25, 13])
-        second_pose[:, :, :2] = second_pose_xy # torch.Size([25, 13])
-        # second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
-        second_pose = second_pose.reshape(num_poses, batch_size, -1)
-        for idx, snd_pose in enumerate(second_pose):
-            # torch.Size([1, 4])
-            snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
-            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, second_pose=snd_pose)
-            xrec_rgb_2 = xrec_2[:, :3, :, :]    
+                if rgb_in_viz.shape[1] > 3:
+                    # colorize with random projection
+                    assert xrec_rgb_2.shape[1] > 3
+                    xrec_rgb_2 = self.to_rgb(xrec_rgb_2)
 
-            if rgb_in_viz.shape[1] > 3:
-                # colorize with random projection
-                assert xrec_rgb_2.shape[1] > 3
-                xrec_rgb_2 = self.to_rgb(xrec_rgb_2)
-
-            log[f"reconstructions_rgb_2_{idx}"] = xrec_rgb_2.clone().detach()
+                log[f"reconstructions_rgb_2_{idx}"] = xrec_rgb_2.clone().detach()
 
         return log
     
