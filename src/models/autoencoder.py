@@ -407,9 +407,9 @@ class PoseAutoencoder(AutoencoderKL):
             
             # aeloss = torch.nan_to_num(aeloss)
 
-            if torch.isnan(aeloss.any()):
+            if torch.isnan(aeloss):
                 return None
-                
+
             return aeloss
         # Train the discriminator
         if optimizer_idx == 1:
@@ -423,7 +423,7 @@ class PoseAutoencoder(AutoencoderKL):
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
             # discloss = torch.nan_to_num(discloss)
-            if torch.isnan(discloss.any()):
+            if torch.isnan(discloss):
                 return None
 
             return discloss
