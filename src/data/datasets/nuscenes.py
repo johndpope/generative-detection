@@ -193,7 +193,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         z_sq = obj_dist**2 - x**2 - y**2
         return math.sqrt(z_sq)
 
-    def compute_z_crop(self, H, H_crop, x, y, z)
+    def compute_z_crop(self, H, H_crop, x, y, z):
         obj_dist_sq = x**2 + y**2 + z**2
         obj_dist = math.sqrt(obj_dist_sq)
         
