@@ -623,7 +623,7 @@ class PoseAutoencoder(AutoencoderKL):
         log["reconstructions_rgb" + namespace] = xrec_rgb.clone().detach()
         log["reconstructions_rgb_2" + namespace] = xrec_rgb_2.clone().detach()
 
-        log = self.log_perturbed_poses(second_pose, rgb_in, rgb_in_viz, log)
+        # log = self.log_perturbed_poses(second_pose, rgb_in, rgb_in_viz, log)
 
         return log
     
