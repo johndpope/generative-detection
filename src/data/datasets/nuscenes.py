@@ -184,6 +184,24 @@ class NuScenesBase(MMDetNuScenesDataset):
         padding_pixels_resampled = padding_pixels * resampling_factor[0]
         return patch_resized_tensor, patch_center, patch_size_sq, resampling_factor, padding_pixels_resampled, mask
     
+    def compute_cropped_distance(self, H, H_crop, obj_dist):
+        """do_crop = (H * do) / H_crop"""
+        obj_dist_crop = (H * obj_dist) / H_crop
+        return obj_dist_crop
+    
+    def compute_z_from_fixed_xy(self, x, y, obj_dist):
+        z_sq = obj_dist**2 - x**2 - y**2
+        return math.sqrt(z_sq)
+
+    def compute_z_crop(self, H, H_crop, x, y, z)
+        obj_dist_sq = x**2 + y**2 + z**2
+        obj_dist = math.sqrt(obj_dist_sq)
+        
+        obj_dist_crop = self.compute_cropped_distance(H, H_crop, obj_dist)
+        z_crop = self.compute_z_from_fixed_xy(x, y, obj_dist_crop)
+
+        return z_crop
+
     def _get_yaw_perturbed(self, yaw, perturb_degrees_min=30, perturb_degrees_max=90):
         # perturb yaw by a random value between -perturb_degrees and perturb_degrees
         perturb_degrees = np.random.uniform(perturb_degrees_min, perturb_degrees_max)
