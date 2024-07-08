@@ -202,6 +202,18 @@ class NuScenesBase(MMDetNuScenesDataset):
 
         return z_crop
 
+    def get_perturbed_depth_crop(self, original_crop, x, y, z, max_perturb=0.5):
+        H, W = original_crop.shape
+
+        # sample H_crop to be max_perturb percent less or more than H
+        perturb = np.random.uniform(-max_perturb, max_perturb)
+        
+        multiplier = 1 + perturb
+        H_crop = H * multiplier
+        z_crop = self.compute_z_crop(H, H_crop, x, y, z)
+
+        return z_crop
+
     def _get_yaw_perturbed(self, yaw, perturb_degrees_min=30, perturb_degrees_max=90):
         # perturb yaw by a random value between -perturb_degrees and perturb_degrees
         perturb_degrees = np.random.uniform(perturb_degrees_min, perturb_degrees_max)
