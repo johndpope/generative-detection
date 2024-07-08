@@ -553,17 +553,17 @@ class NuScenesBase(MMDetNuScenesDataset):
             # get a second crop of the same object instance again
             # TODO: Make optional
             # only get second crop with probability perturb_prob, else copy first crop dict to second crop dict
-            if np.random.rand() <= self.perturb_prob:
-                patch_obj_2 = self._get_patchGT(cam_instance,
-                                                img_path=os.path.join(self.img_root, cam_name, img_file),
-                                                cam2img=sample_img_info.cam2img,
-                                                postfix="_2")
-                ret.update({k+"_2": v for k,v in patch_obj_2.items()})
-                ret.bbox_3d_gt_2 = patch_obj_2.bbox_3d
-            else:
-                patch_obj_2 = patch_obj.copy()
-                ret.update({k+"_2": v for k,v in patch_obj.items()})
-                ret.bbox_3d_gt_2 = patch_obj.bbox_3d
+            # if np.random.rand() <= self.perturb_prob:
+            patch_obj_2 = self._get_patchGT(cam_instance,
+                                            img_path=os.path.join(self.img_root, cam_name, img_file),
+                                            cam2img=sample_img_info.cam2img,
+                                            postfix="_2")
+            ret.update({k+"_2": v for k,v in patch_obj_2.items()})
+            ret.bbox_3d_gt_2 = patch_obj_2.bbox_3d
+            # else:
+            #     patch_obj_2 = patch_obj.copy()
+            #     ret.update({k+"_2": v for k,v in patch_obj.items()})
+            #     ret.bbox_3d_gt_2 = patch_obj.bbox_3d
                 
             if patch_obj is None or patch_obj_2 is None:
                 if idx + 1 >= self.__len__():

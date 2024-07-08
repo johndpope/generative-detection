@@ -405,7 +405,11 @@ class PoseAutoencoder(AutoencoderKL):
             self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
-            aeloss = torch.nan_to_num(aeloss)
+            # aeloss = torch.nan_to_num(aeloss)
+
+            if torch.isnan(aeloss.any()):
+                return None
+                
             return aeloss
         # Train the discriminator
         if optimizer_idx == 1:
@@ -417,8 +421,12 @@ class PoseAutoencoder(AutoencoderKL):
                                                 last_layer=self.get_last_layer(), split="train")
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-            aeloss = torch.nan_to_num(discloss)
-            return aeloss
+            
+            # discloss = torch.nan_to_num(discloss)
+            if torch.isnan(discloss.any()):
+                return None
+
+            return discloss
     
     def validation_step(self, batch, batch_idx):
         
