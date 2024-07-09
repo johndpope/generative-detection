@@ -92,7 +92,7 @@ data:
         patch_aspect_ratio: 1.0
         perturb_center: True
         perturb_scale: True
-        perturb_prob: 0.8
+        perturb_prob: 1.0
     validation:
       target: src.data.datasets.nuscenes.NuScenesValidation
       params:
