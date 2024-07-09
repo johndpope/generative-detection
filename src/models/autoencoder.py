@@ -24,7 +24,7 @@ from src.modules.autoencodermodules.pose_encoder import PoseEncoderSpatialVAE as
 from src.modules.autoencodermodules.pose_decoder import PoseDecoderSpatialVAE as PoseDecoder
 from src.util.distributions import DiagonalGaussianDistribution
     
-from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM, POSE_6D_DIM, FILL_FACTOR_DIM
+from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM, POSE_6D_DIM, FILL_FACTOR_DIM, FINAL_PERTURB_RAD
 
 try:
     import wandb
@@ -128,6 +128,9 @@ class PoseAutoencoder(AutoencoderKL):
                 # add optimizer to ignore_keys list
                 ignore_keys = ignore_keys + ["optimizer"]
                 self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
+        self.perturb_rad_init = None
+        self.perturb_rad = None
+        self.total_steps_in_epoch = None 
 
     @contextmanager
     def ema_scope(self, context=None):
@@ -385,7 +388,26 @@ class PoseAutoencoder(AutoencoderKL):
             
         return rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose
     
+    def _update_perturb_rad(self):
+        if self.global_step >= self.total_steps_in_epoch:
+            self.perturb_rad = FINAL_PERTURB_RAD
+        else: 
+            # linearly decrease self.perturb_rad from initial value to 0.5 over 1 epoch
+            initial_rad = self.perturb_rad_init
+            final_rad = FINAL_PERTURB_RAD
+            total_steps = self.total_steps_in_epoch 
+
+            step_size = (initial_rad - final_rad) / total_steps
+            current_rad = initial_rad - (self.global_step * step_size)
+            perturb_rad = max(current_rad, final_rad)
+            self.perturb_rad = nn.Parameter(torch.tensor(perturb_rad))
+        return
+
     def training_step(self, batch, batch_idx, optimizer_idx):
+        
+        self._update_perturb_rad()
+        self.log("perturb_rad", self.perturb_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        
         # Get inputs in right shape
         rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
         
@@ -640,8 +662,6 @@ class PoseAutoencoder(AutoencoderKL):
         x = torch.linspace(-1, 1, steps=5) # torch.Size([5])
         y = torch.linspace(-1, 1, steps=5) # torch.Size([5])
 
-        # poses - (-1, 0), (-0.5, 0), (0, 0), (0.5, 0), (1, 0)
-        # (0, -1), (0, -0.5), (0, 0), (0, 0.5), (0, 1)
         second_pose_xy_list = []
         for i in range(5):
             for j in range(5):

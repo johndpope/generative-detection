@@ -466,6 +466,10 @@ def main():
     # configure learning rate
     model = configure_learning_rate(config, model, lightning_config, cpu, opt)
 
+    model.perturb_rad_init = data.datasets['train'].data.perturb_rad_init
+    model.perturb_rad = data.datasets['train'].data.perturb_rad
+    model.total_steps_in_epoch = len(data.datasets['train'].data) / data.batch_size
+    
     # allow checkpointing via USR1
     def melk(*args, **kwargs):
         # run all checkpoint hooks

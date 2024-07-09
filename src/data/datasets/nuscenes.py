@@ -1,5 +1,6 @@
 # src/data/nuscenes.py
 import torch
+import torch.nn as nn
 from mmdet3d.registry import DATASETS
 from mmdet3d.datasets.nuscenes_dataset import NuScenesDataset as MMDetNuScenesDataset
 from torch.utils.data import Dataset
@@ -39,7 +40,7 @@ class NuScenesBase(MMDetNuScenesDataset):
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
                  is_sweep=False, perturb_center=False, perturb_scale=False, 
                  negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
-                 perturb_prob=0.0, **kwargs):
+                 perturb_prob=0.0, perturb_rad_init=0.1, **kwargs):
         # Setup directory
         self.data_root = data_root
         self.img_root = os.path.join(data_root, "samples" if not is_sweep else "sweeps")
@@ -67,6 +68,8 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         self.DEBUG = False
         self.perturb_prob = perturb_prob
+        self.perturb_rad_init = torch.tensor(perturb_rad_init)
+        self.perturb_rad = nn.Parameter(self.perturb_rad_init, requires_grad=False) # default 0.1
 
         
     def __len__(self):
@@ -370,13 +373,15 @@ class NuScenesBase(MMDetNuScenesDataset):
         bbox_height = y2 - y1
         
         # Calculate the maximum perturbation distance
-        r_max_perturb = 0.5 * min(bbox_width, bbox_height)
+        r_max_perturb = self.perturb_rad * min(bbox_width, bbox_height)
         
         # Random perturbation in x direction within the max perturbation limit
-        x_perturb = np.random.uniform(-r_max_perturb, r_max_perturb)
+        r_max_perturb_cpu = r_max_perturb.clone().detach().cpu().numpy()
+        x_perturb = np.random.uniform(-r_max_perturb_cpu, r_max_perturb_cpu)
         
         # Calculate corresponding y perturbation to maintain visibility condition
-        max_y_perturb = np.sqrt(r_max_perturb**2 - x_perturb**2)
+
+        max_y_perturb = np.sqrt(r_max_perturb_cpu**2 - x_perturb**2)
         y_perturb = np.random.uniform(-max_y_perturb, max_y_perturb)
         
         # Perturbed center coordinates
