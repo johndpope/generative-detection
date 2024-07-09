@@ -128,9 +128,8 @@ class PoseAutoencoder(AutoencoderKL):
                 # add optimizer to ignore_keys list
                 ignore_keys = ignore_keys + ["optimizer"]
                 self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-        self.perturb_rad_init = None
-        self.perturb_rad = None
-        self.total_steps_in_epoch = None 
+
+        self.iter_counter = 0
 
     @contextmanager
     def ema_scope(self, context=None):
@@ -233,21 +232,21 @@ class PoseAutoencoder(AutoencoderKL):
         Returns:
             Dropout probability.
         """
-        if self.global_step < self.encoder_pretrain_steps: # encoder pretraining phase
+        if self.iter_counter < self.encoder_pretrain_steps: # encoder pretraining phase
             # set dropout probability to 1.0
             dropout_prob = self.dropout_prob_init
-        elif self.global_step < self.intermediate_img_feature_leak_steps + self.encoder_pretrain_steps:
+        elif self.iter_counter < self.intermediate_img_feature_leak_steps + self.encoder_pretrain_steps:
             dropout_prob = 0.95
         
-        elif self.global_step < self.intermediate_img_feature_leak_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps: # pose conditioned generation phase
+        elif self.iter_counter < self.intermediate_img_feature_leak_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps: # pose conditioned generation phase
             dropout_prob = self.dropout_prob_init
         
-        elif self.global_step < self.intermediate_img_feature_leak_steps + self.dropout_warmup_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps: # pose conditioned generation phase
+        elif self.iter_counter < self.intermediate_img_feature_leak_steps + self.dropout_warmup_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps: # pose conditioned generation phase
             # linearly decrease dropout probability from initial to final value
             if self.dropout_prob_init == self.dropout_prob_final or self.dropout_warmup_steps == 0:
                 dropout_prob = self.dropout_prob_final
             else:
-                dropout_prob = self.dropout_prob_init - (self.dropout_prob_init - self.dropout_prob_final) * (self.global_step - self.encoder_pretrain_steps) / self.dropout_warmup_steps # 1.0 - (1.0 - 0.7) * (10000 - 10000) / 10000 = 1.0
+                dropout_prob = self.dropout_prob_init - (self.dropout_prob_init - self.dropout_prob_final) * (self.iter_counter - self.encoder_pretrain_steps) / self.dropout_warmup_steps # 1.0 - (1.0 - 0.7) * (10000 - 10000) / 10000 = 1.0
         
         else: # VAE phase
             # set dropout probability to dropout_prob_final
@@ -298,7 +297,7 @@ class PoseAutoencoder(AutoencoderKL):
             else:
                 gen_pose = dec_pose
             
-            if self.global_step < self.encoder_pretrain_steps: # no reconstruction loss in this phase
+            if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
                 dec_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
             else:
                 enc_pose = self._encode_pose(gen_pose) # torch.Size([4, 16, 16, 16])
@@ -389,24 +388,29 @@ class PoseAutoencoder(AutoencoderKL):
         return rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose
     
     def _update_perturb_rad(self):
-        if self.global_step >= self.total_steps_in_epoch:
-            self.perturb_rad = FINAL_PERTURB_RAD
+        
+        perturb_rad_init = self.train_dataset.perturb_rad_init
+        perturb_rad = self.train_dataset.perturb_rad
+        
+        total_steps_in_epoch = len(self.train_dataset) / self.batch_size
+    
+        if self.iter_counter >= total_steps_in_epoch:
+            perturb_rad.data = torch.tensor(FINAL_PERTURB_RAD, requires_grad=False)
         else: 
-            # linearly decrease self.perturb_rad from initial value to 0.5 over 1 epoch
-            initial_rad = self.perturb_rad_init
+            # linearly decrease perturb_rad from initial value to 0.5 over 1 epoch
+            initial_rad = perturb_rad_init
             final_rad = FINAL_PERTURB_RAD
-            total_steps = self.total_steps_in_epoch 
+            total_steps = total_steps_in_epoch 
 
             step_size = (initial_rad - final_rad) / total_steps
-            current_rad = initial_rad - (self.global_step * step_size)
-            perturb_rad = max(current_rad, final_rad)
-            self.perturb_rad = nn.Parameter(torch.tensor(perturb_rad))
-        return
+            current_rad = initial_rad - (self.iter_counter * step_size)
+            perturb_rad.data = torch.tensor(min(current_rad, final_rad), requires_grad=False)
+        return perturb_rad
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         
-        self._update_perturb_rad()
-        self.log("perturb_rad", self.perturb_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        perturb_rad = self._update_perturb_rad()
+        self.log("perturb_rad", perturb_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         # Get inputs in right shape
         rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
@@ -422,13 +426,13 @@ class PoseAutoencoder(AutoencoderKL):
             aeloss, log_dict_ae = self.loss(rgb_gt, mask_gt, pose_gt,
                                             dec_obj, dec_pose,
                                             class_gt, class_gt_label, bbox_gt, fill_factor_gt,
-                                            posterior_obj, bbox_posterior, optimizer_idx, self.global_step, mask_2d_bbox,
+                                            posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
                                             last_layer=self.get_last_layer(), split="train")            
             self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
-            # aeloss = torch.nan_to_num(aeloss)
-
+            self.iter_counter += 1
+            
             if torch.isnan(aeloss):
                 return None
 
@@ -439,12 +443,13 @@ class PoseAutoencoder(AutoencoderKL):
             discloss, log_dict_disc = self.loss(rgb_gt, mask_gt, pose_gt,
                                                 dec_obj, dec_pose,
                                                 class_gt, class_gt_label, bbox_gt, fill_factor_gt,
-                                                posterior_obj, bbox_posterior, optimizer_idx, self.global_step, mask_2d_bbox,
+                                                posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
                                                 last_layer=self.get_last_layer(), split="train")
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
-            # discloss = torch.nan_to_num(discloss)
+            self.iter_counter += 1
+            
             if torch.isnan(discloss):
                 return None
 
@@ -464,14 +469,14 @@ class PoseAutoencoder(AutoencoderKL):
                                       dec_obj, dec_pose,
                                       class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                       posterior_obj, bbox_posterior, 0, 
-                                      global_step=self.global_step, mask_2d_bbox=mask_2d_bbox,
+                                      global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
                                       last_layer=self.get_last_layer(), split="val")
 
         _, log_dict_disc = self.loss(rgb_gt, mask_gt, pose_gt,
                                         dec_obj, dec_pose,
                                         class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                         posterior_obj, bbox_posterior, 1, 
-                                        global_step=self.global_step, mask_2d_bbox=mask_2d_bbox,
+                                        global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
                                         last_layer=self.get_last_layer(), split="val")
 
         self.log("val/rec_loss", log_dict_ae["val/rec_loss"], sync_dist=True)
