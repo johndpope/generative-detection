@@ -419,7 +419,7 @@ class PoseAutoencoder(AutoencoderKL):
         dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, second_pose=second_pose)
         
         self.log("dropout_prob", self.dropout_prob, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        
+        self.iter_counter += 1
         # Train the autoencoder
         if optimizer_idx == 0:
             # train encoder+decoder+logvar # last layer: torch.Size([3, 128, 3, 3])
@@ -430,8 +430,6 @@ class PoseAutoencoder(AutoencoderKL):
                                             last_layer=self.get_last_layer(), split="train")            
             self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-            
-            self.iter_counter += 1
             
             if torch.isnan(aeloss):
                 return None
@@ -447,8 +445,6 @@ class PoseAutoencoder(AutoencoderKL):
                                                 last_layer=self.get_last_layer(), split="train")
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-            
-            self.iter_counter += 1
             
             if torch.isnan(discloss):
                 return None
