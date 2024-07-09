@@ -40,7 +40,9 @@ class NuScenesBase(MMDetNuScenesDataset):
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
                  is_sweep=False, perturb_center=False, perturb_scale=False, 
                  negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
-                 perturb_prob=0.0, perturb_rad_init=0.1, perturb_yaw=False, **kwargs):
+                 perturb_prob=0.0, perturb_rad_init=0.1, 
+                 perturb_yaw=False, perturb_z=False, 
+                 **kwargs):
         # Setup directory
         self.data_root = data_root
         self.img_root = os.path.join(data_root, "samples" if not is_sweep else "sweeps")
@@ -50,6 +52,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.label_ids = [LABEL_NAME2ID[label_name] for label_name in LABEL_NAME2ID.keys() if label_name in label_names]
         logging.info(f"Using label names: {self.label_names}, label ids: {self.label_ids}")
         # Setup patch
+        self.patch_aspect_ratio = patch_aspect_ratio
         self.patch_size_return = (patch_height, int(patch_height * patch_aspect_ratio)) # aspect ratio is width/height
         self.perturb_center = perturb_center if self.split != "test" else False
         self.perturb_scale = perturb_scale if self.split != "test" else False
@@ -66,6 +69,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         # Set sampling probability for negative samples
         self.negative_sample_prob = negative_sample_prob if "background" in self.label_names else 0.0
         self.perturb_yaw = perturb_yaw
+        self.perturb_z = perturb_z
         self.DEBUG = False
         self.perturb_prob = perturb_prob
         self.perturb_rad_init = torch.tensor(perturb_rad_init)
@@ -191,29 +195,59 @@ class NuScenesBase(MMDetNuScenesDataset):
         obj_dist_crop = (H * obj_dist) / H_crop
         return obj_dist_crop
     
-    def compute_z_from_fixed_xy(self, x, y, obj_dist):
+    def compute_z_from_fixed_xy(self, x, y, obj_dist, eps=1e-8):
         z_sq = obj_dist**2 - x**2 - y**2
-        return math.sqrt(z_sq)
+        return math.sqrt(z_sq + eps)
 
-    def compute_z_crop(self, H, H_crop, x, y, z):
+    def compute_z_crop(self, H, H_crop, x, y, z, eps=1e-8):
         obj_dist_sq = x**2 + y**2 + z**2
-        obj_dist = math.sqrt(obj_dist_sq)
+        obj_dist = math.sqrt(obj_dist_sq + eps)
         
         obj_dist_crop = self.compute_cropped_distance(H, H_crop, obj_dist)
         z_crop = self.compute_z_from_fixed_xy(x, y, obj_dist_crop)
 
         return z_crop
 
-    def get_perturbed_depth_crop(self, original_crop, x, y, z):
+    def recrop_patch(self, H, W, H_crop, W_crop, original_crop):
+        # recrop original_crop with H_crop height
+        # Calculate the center of the original crop
+        center_y = H // 2
+        center_x = W // 2
+
+        # Calculate the start and end indices for the new crop
+        start_y = center_y - H_crop // 2
+        end_y = start_y + H_crop
+
+        start_x = center_x - W_crop // 2
+        end_x = start_x + W_crop
+
+        start_y = max(0, start_y)
+        end_y = min(H, end_y)
+
+        start_x = max(0, start_x)
+        end_x = min(W, end_x)
+
+        # Recrop the original_crop with H_crop height
+        original_crop_recropped = original_crop[start_y:end_y, start_x:end_x]
+
+        return original_crop_recropped
+
+    def get_perturbed_depth_crop(self, original_crop, x, y, z, full_image, fill_factor):
         H, W = original_crop.shape
 
         # sample H_crop to be max_perturb percent less or more than H
         perturb_ratio = np.random.rand()
         multiplier = perturb_ratio if np.random.rand() > 0.5 else (1/perturb_ratio)
         H_crop = H * multiplier
+        W_crop = H_crop * self.patch_aspect_ratio
+        H_crop = max(1, H_crop)
         z_crop = self.compute_z_crop(H, H_crop, x, y, z)
 
-        return z_crop
+        fill_factor_cropped = fill_factor * multiplier # TODO: is this correct?
+
+        original_crop_recropped = self.recrop_patch(H, W, H_crop, W_crop, original_crop)
+        
+        return z_crop, original_crop_recropped, fill_factor_cropped
 
     def _get_yaw_perturbed(self, yaw, perturb_degrees_min=30, perturb_degrees_max=90):
         # perturb yaw by a random value between -perturb_degrees and perturb_degrees
