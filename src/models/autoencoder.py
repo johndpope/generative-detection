@@ -388,22 +388,18 @@ class PoseAutoencoder(AutoencoderKL):
         return rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose
     
     def _update_perturb_rad(self):
-        
-        perturb_rad_init = self.train_dataset.perturb_rad_init
         perturb_rad = self.train_dataset.perturb_rad
-        
         total_steps_in_epoch = len(self.train_dataset) / self.batch_size
     
         if self.iter_counter >= total_steps_in_epoch:
             perturb_rad.data = torch.tensor(FINAL_PERTURB_RAD, requires_grad=False)
         else: 
             # linearly decrease perturb_rad from initial value to 0.5 over 1 epoch
-            initial_rad = perturb_rad_init
             final_rad = FINAL_PERTURB_RAD
             total_steps = total_steps_in_epoch 
 
-            step_size = (initial_rad - final_rad) / total_steps
-            current_rad = initial_rad - (self.iter_counter * step_size)
+            step_size = (final_rad - self.train_dataset.perturb_rad_init) / total_steps
+            current_rad = self.train_dataset.perturb_rad_init + (self.iter_counter * step_size)
             perturb_rad.data = torch.tensor(min(current_rad, final_rad), requires_grad=False)
         return perturb_rad
 

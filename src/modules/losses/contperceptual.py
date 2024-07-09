@@ -137,7 +137,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         # Perceptual loss
         if self.perceptual_weight > 0:
             p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous()) # torch.Size([4, 1, 1, 1])
-            if torch.sum(p_loss) > 1000:
+            if torch.sum(p_loss) > 100:
                 p_loss = 0.0
             rec_loss = rec_loss + self.perceptual_weight * p_loss # torch.Size([4, 3, 256, 256])
         return rec_loss # torch.Size([4, 3, 256, 256])

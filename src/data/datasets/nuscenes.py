@@ -40,7 +40,7 @@ class NuScenesBase(MMDetNuScenesDataset):
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
                  is_sweep=False, perturb_center=False, perturb_scale=False, 
                  negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
-                 perturb_prob=0.0, perturb_rad_init=0.1, **kwargs):
+                 perturb_prob=0.0, perturb_rad_init=0.1, perturb_yaw=False, **kwargs):
         # Setup directory
         self.data_root = data_root
         self.img_root = os.path.join(data_root, "samples" if not is_sweep else "sweeps")
@@ -65,12 +65,11 @@ class NuScenesBase(MMDetNuScenesDataset):
             self.hmax_dict = pkl.load(f)
         # Set sampling probability for negative samples
         self.negative_sample_prob = negative_sample_prob if "background" in self.label_names else 0.0
-        
+        self.perturb_yaw = perturb_yaw
         self.DEBUG = False
         self.perturb_prob = perturb_prob
         self.perturb_rad_init = torch.tensor(perturb_rad_init)
         self.perturb_rad = nn.Parameter(self.perturb_rad_init, requires_grad=False) # default 0.1
-
         
     def __len__(self):
         self.num_samples = super().__len__()
@@ -235,7 +234,9 @@ class NuScenesBase(MMDetNuScenesDataset):
     def _get_pose_6d_perturbed(self, cam_instance):
         bbox_3d = cam_instance.bbox_3d
         x, y, z, l, h, w, yaw = bbox_3d # in camera coordinate system? need to convert to patch NDC
-        yaw = self._get_yaw_perturbed(yaw)
+        if self.perturb_yaw:
+            yaw = self._get_yaw_perturbed(yaw)
+
         roll, pitch = 0.0, 0.0 # roll and pitch are 0 for all instances in nuscenes dataset
     
         euler_angles = torch.tensor([pitch, roll, yaw], dtype=torch.float32)
