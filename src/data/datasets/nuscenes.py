@@ -205,13 +205,12 @@ class NuScenesBase(MMDetNuScenesDataset):
 
         return z_crop
 
-    def get_perturbed_depth_crop(self, original_crop, x, y, z, max_perturb=0.5):
+    def get_perturbed_depth_crop(self, original_crop, x, y, z):
         H, W = original_crop.shape
 
         # sample H_crop to be max_perturb percent less or more than H
-        perturb = np.random.uniform(-max_perturb, max_perturb)
-        
-        multiplier = 1 + perturb
+        perturb_ratio = np.random.rand()
+        multiplier = perturb_ratio if np.random.rand() > 0.5 else (1/perturb_ratio)
         H_crop = H * multiplier
         z_crop = self.compute_z_crop(H, H_crop, x, y, z)
 
