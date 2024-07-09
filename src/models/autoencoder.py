@@ -67,6 +67,7 @@ class PoseAutoencoder(AutoencoderKL):
                  dropout_prob_final=0.7,
                  dropout_warmup_steps=5000,
                  pose_conditioned_generation_steps=10000,
+                 perturb_rad_warmup_steps=100000,
                  intermediate_img_feature_leak_steps=0,
                  add_noise_to_z_obj=True,
                  train_on_yaw=True,
@@ -113,6 +114,7 @@ class PoseAutoencoder(AutoencoderKL):
         self.z_channels = ddconfig["z_channels"]
         self.euler_convention=euler_convention
         self.feat_dims = feat_dims
+        self.perturb_rad_warmup_steps = perturb_rad_warmup_steps
         
         self.use_ema = ema_decay is not None
         if self.use_ema:
@@ -388,20 +390,13 @@ class PoseAutoencoder(AutoencoderKL):
         return rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose
     
     def _update_perturb_rad(self):
-        perturb_rad = self.train_dataset.perturb_rad
-        total_steps_in_epoch = len(self.train_dataset) / self.batch_size
-    
-        if self.iter_counter >= total_steps_in_epoch:
-            perturb_rad.data = torch.tensor(FINAL_PERTURB_RAD, requires_grad=False)
-        else: 
-            # linearly decrease perturb_rad from initial value to 0.5 over 1 epoch
-            final_rad = FINAL_PERTURB_RAD
-            total_steps = total_steps_in_epoch 
-
-            step_size = (final_rad - self.train_dataset.perturb_rad_init) / total_steps
+        if self.iter_counter >= self.perturb_rad_warmup_steps:
+            self.train_dataset.perturb_rad.data = torch.tensor(FINAL_PERTURB_RAD, requires_grad=False)
+        else: # linearly decrease perturb_rad from initial value to 0.5 over 1 epoch
+            step_size = (FINAL_PERTURB_RAD - self.train_dataset.perturb_rad_init) / self.perturb_rad_warmup_steps 
             current_rad = self.train_dataset.perturb_rad_init + (self.iter_counter * step_size)
-            perturb_rad.data = torch.tensor(min(current_rad, final_rad), requires_grad=False)
-        return perturb_rad
+            self.train_dataset.perturb_rad.data = torch.tensor(min(current_rad, FINAL_PERTURB_RAD), requires_grad=False)
+        return self.train_dataset.perturb_rad
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         
