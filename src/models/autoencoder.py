@@ -23,7 +23,7 @@ from src.modules.autoencodermodules.feat_decoder import FeatDecoder
 from src.modules.autoencodermodules.pose_encoder import PoseEncoderSpatialVAE as PoseEncoder
 from src.modules.autoencodermodules.pose_decoder import PoseDecoderSpatialVAE as PoseDecoder
 from src.util.distributions import DiagonalGaussianDistribution
-    
+from src.util.misc import flip_tensor    
 from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM, POSE_6D_DIM, FILL_FACTOR_DIM, FINAL_PERTURB_RAD
 
 try:
@@ -288,19 +288,13 @@ class PoseAutoencoder(AutoencoderKL):
             shift_x = shifts_x_pixels[i].item()
             shift_y = shifts_y_pixels[i].item()
             
+            kernels[i, :, (height // 2) + shift_y, (width // 2) + shift_x] = 1
 
-            if shift_y >= 0 and shift_x >= 0:
-                kernels[i, :, (height // 2) + shift_y, (width // 2) - shift_x] = 1
-            elif shift_y >= 0 and shift_x < 0:
-                kernels[i, :, (height // 2) + shift_y, (width // 2) + shift_x] = 1
-            elif shift_y < 0 and shift_x >= 0:
-                kernels[i, :, (height // 2) - shift_y, (width // 2) - shift_x] = 1
-            else:
-                kernels[i, :, (height // 2) - shift_y, (width // 2) + shift_x] = 1
-
+        # flip kernel
+        kernels_flipped = flip_tensor(kernels)
         # Perform the convolution - apply convolution to each channel separately
         images_expanded = images.reshape(1, batch_size * channels, height, width)
-        kernels_expanded = kernels.view(batch_size * channels, 1, height, width)
+        kernels_expanded = kernels_flipped.view(batch_size * channels, 1, height, width)
         shifted_images = F.conv2d(
             input=images_expanded, 
             weight=kernels_expanded, 

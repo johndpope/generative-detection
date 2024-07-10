@@ -4,6 +4,7 @@ import sys
 import logging
 import json
 import torch
+import numpy as np
 
 class EasyDict(dict):
     """
@@ -79,3 +80,10 @@ def set_cache_directories(opts):
     """Set environment variables for cache directories."""
     os.environ["TRANSFORMERS_CACHE"] = opts.transformers_cache
     os.environ["TORCH_HOME"] = opts.torch_home
+
+def flip_tensor(t):
+   
+    flipped = t.cpu().numpy().copy()
+
+    flipped = np.flip(flipped, axis=(2, 3))
+    return torch.tensor(flipped.copy()).to(t.device)
