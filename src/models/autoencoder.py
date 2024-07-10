@@ -389,7 +389,6 @@ class PoseAutoencoder(AutoencoderKL):
                 
                 if self.apply_convolutional_shift_img_space:
                     dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
-                    inp_viz = self.apply_manual_shift(input_im, shift_x, shift_y)
             else:
                 z_obj_pose = z_obj + enc_pose # torch.Size([4, 16, 16, 16])
                 dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
