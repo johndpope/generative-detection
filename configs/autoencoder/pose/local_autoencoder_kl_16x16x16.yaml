@@ -2,6 +2,14 @@ model:
   base_learning_rate: 4.5e-6
   target: src.models.autoencoder.PoseAutoencoder
   params:
+    quantconfig:
+      target: ldm.models.autoencoder.VectorQuantizer
+      params:
+        n_e: 16384
+        e_dim: 4
+        remap: Null
+        sane_index_shape: False
+        beta: 0.25
     apply_convolutional_shift_img_space: True
     monitor: "val/rec_loss"
     embed_dim: 16

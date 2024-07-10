@@ -74,6 +74,7 @@ class PoseAutoencoder(AutoencoderKL):
                  ema_decay=0.999,
                  apply_convolutional_shift_img_space=False,
                  apply_convolutional_shift_latent_space=False,
+                 quantconfig=None
                  ):
         pl.LightningModule.__init__(self)
         self.apply_convolutional_shift_img_space = apply_convolutional_shift_img_space
@@ -97,6 +98,10 @@ class PoseAutoencoder(AutoencoderKL):
         self.image_mask_key = image_mask_key
         self.encoder = FeatEncoder(**ddconfig)
         self.decoder = FeatDecoder(**ddconfig)
+
+        if quantconfig is not None:
+            self.quantize = instantiate_from_config(quantconfig)
+
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
         self.loss = instantiate_from_config(lossconfig)
         assert ddconfig["double_z"]
@@ -228,10 +233,15 @@ class PoseAutoencoder(AutoencoderKL):
         return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.feature_dims[0], self.feature_dims[1], self.feature_dims[2])
     
     def encode(self, x):
-        x = x.to(self.device) # torch.Size([4, 3, 256, 256])
-        h = self.encoder(x) # torch.Size([4, 32, 16, 16])
-        moments_obj = self.quant_conv_obj(h) # torch.Size([4, 32, 16, 16])
-        pose_feat = self.quant_conv_pose(h) # torch.Size([4, 16, 16, 16])
+        x = x.to(self.device) # torch.Size([3, 3, 256, 256])
+        h = self.encoder(x) # torch.Size([3, 32, 16, 16])
+        moments_obj = self.quant_conv_obj(h) # torch.Size([3, 8, 16, 16])
+        pose_feat = self.quant_conv_pose(h) # torch.Size([3, 4, 16, 16])
+        ## WIP
+        if hasattr(self, "quantize"):
+            moments_obj, emb_loss_obj, info_obj = self.quantize(moments_obj) # torch.Size([3, 8, 16, 16])
+            pose_feat, emb_loss_pose, info_pose = self.quantize(pose_feat) # torch.Size([3, 4, 16, 16])
+        # WIP
         posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
         return posterior_obj, pose_feat
     
@@ -356,7 +366,7 @@ class PoseAutoencoder(AutoencoderKL):
             z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
             z_obj = z_obj + z_obj_noise
         
-        # torch.Size([4, 16, 16, 16]), True
+        # inputs: torch.Size([4, 16, 16, 16]), True
         dec_pose, bbox_posterior = self._decode_pose(pose_feat, sample_posterior) # torch.Size([4, 8]), torch.Size([4, 7])
         # Replace pose with other pose if supervised with other patch
         if second_pose is not None:
@@ -394,7 +404,7 @@ class PoseAutoencoder(AutoencoderKL):
                 dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
             
         return dec_obj, dec_pose, posterior_obj, bbox_posterior
-        
+
     def get_pose_input(self, batch, k, postfix=""):
         x = batch[k+postfix] 
 
@@ -678,13 +688,17 @@ class PoseAutoencoder(AutoencoderKL):
     
     def configure_optimizers(self):
         lr = self.learning_rate
-        opt_ae = torch.optim.Adam(list(self.encoder.parameters())+
-                                  list(self.decoder.parameters())+
-                                  list(self.quant_conv_obj.parameters())+
-                                  list(self.quant_conv_pose.parameters())+
-                                  list(self.post_quant_conv.parameters())+
-                                  list(self.pose_encoder.parameters())+
-                                  list(self.pose_decoder.parameters()),
+        opt_ae_params = list(self.encoder.parameters())+ \
+                                  list(self.decoder.parameters())+ \
+                                  list(self.quant_conv_obj.parameters())+ \
+                                  list(self.quant_conv_pose.parameters())+ \
+                                  list(self.post_quant_conv.parameters())+ \
+                                  list(self.pose_encoder.parameters())+ \
+                                  list(self.pose_decoder.parameters())
+        if hasattr(self, 'quantize'):
+            opt_ae_params = opt_ae_params + list(self.quantize.parameters())
+        
+        opt_ae = torch.optim.Adam(opt_ae_params,
                                   lr=lr, betas=(0.5, 0.9))
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
