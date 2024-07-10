@@ -282,7 +282,7 @@ class PoseAutoencoder(AutoencoderKL):
         shifts_y_pixels = (shifts_y * (height // 2)).int()
 
         # Create the kernels
-        kernels = torch.zeros((batch_size, channels, height, width))
+        kernels = torch.zeros((batch_size, 1, height, width))
 
         for i in range(batch_size):
             shift_x = shifts_x_pixels[i].item()
@@ -299,7 +299,7 @@ class PoseAutoencoder(AutoencoderKL):
 
         kernels = kernels.to(images.device)
         # Perform the convolution
-        shifted_images = F.conv2d(input=images, weight=kernels, stride=1, padding='same')
+        shifted_images = F.conv2d(input=images, weight=kernels, stride=1, padding='same', groups=channels)
 
         return shifted_images
 
