@@ -263,19 +263,36 @@ class PoseAutoencoder(AutoencoderKL):
             dropout_prob = self.dropout_prob_final
         
         return dropout_prob
+
+    def apply_manual_shift(self, images, shifts_x, shifts_y):
+        batch_size, channels, height, width = images.shape
+        
+        shifts_x_pixels = (shifts_x * (width // 2)).int()
+        shifts_y_pixels = (shifts_y * (height // 2)).int()
+
+        # Create a mesh grid
+        grid_y, grid_x = torch.meshgrid(torch.arange(height), torch.arange(width))
+        grid_x = grid_x.unsqueeze(0).expand(batch_size, -1, -1).float().to(shifts_x_pixels.device)  # [batch_size, height, width]
+        grid_y = grid_y.unsqueeze(0).expand(batch_size, -1, -1).float().to(shifts_y_pixels.device)  # [batch_size, height, width]
+
+        # Normalize the grid to [-1, 1]
+        grid_x = 2.0 * grid_x / (width - 1) - 1.0
+        grid_y = 2.0 * grid_y / (height - 1) - 1.0
+
+        # Apply the shifts
+        grid_x = grid_x - (shifts_x_pixels.view(-1, 1, 1) * 2.0 / (width - 1))
+        grid_y = grid_y -    (shifts_y_pixels.view(-1, 1, 1) * 2.0 / (height - 1))
+
+        # Stack grids and reshape to [batch_size, height, width, 2]
+        grid = torch.stack((grid_x, grid_y), dim=-1)
+
+        # Sample the images using the computed grid
+        shifted_images = F.grid_sample(images, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
+
+        return shifted_images
+
     
     def apply_convolutional_shift(self, images, shifts_x, shifts_y):
-        """
-        Shift a batch of image tensors by specified shifts in x and y directions with zero padding.
-
-        Args:
-        images (torch.Tensor): The input batch of image tensors (batch_size, height, width).
-        shifts_x (torch.Tensor): The shifts in the x direction for each image (batch_size).
-        shifts_y (torch.Tensor): The shifts in the y direction for each image (batch_size).
-
-        Returns:
-        torch.Tensor: The batch of shifted image tensors.
-        """
         batch_size, channels, height, width = images.shape
         
         shifts_x_pixels = (shifts_x * (width // 2)).int()
@@ -366,13 +383,13 @@ class PoseAutoencoder(AutoencoderKL):
                 z_obj_pose = z_obj
                 
                 if self.apply_convolutional_shift_latent_space:
-                    z_obj_pose = self.apply_convolutional_shift(z_obj_pose, shift_x, shift_y)
+                    z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)
                 
                 dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
                 
                 if self.apply_convolutional_shift_img_space:
-                    dec_obj = self.apply_convolutional_shift(dec_obj, shift_x, shift_y)
-                    inp_viz = self.apply_convolutional_shift(input_im, shift_x, shift_y)
+                    dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
+                    inp_viz = self.apply_manual_shift(input_im, shift_x, shift_y)
             else:
                 z_obj_pose = z_obj + enc_pose # torch.Size([4, 16, 16, 16])
                 dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
