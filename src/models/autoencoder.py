@@ -282,24 +282,31 @@ class PoseAutoencoder(AutoencoderKL):
         shifts_y_pixels = (shifts_y * (height // 2)).int()
 
         # Create the kernels
-        kernels = torch.zeros((batch_size, 1, height, width))
+        kernels = torch.zeros((batch_size, channels, height, width)).to(images.device)
 
         for i in range(batch_size):
             shift_x = shifts_x_pixels[i].item()
             shift_y = shifts_y_pixels[i].item()
             
-            if shift_y >= 0 and shift_x >= 0:
-                kernels[i, :, (height // 2) + shift_y, (width // 2) + shift_x] = 1
-            elif shift_y >= 0 and shift_x < 0:
-                kernels[i, :, (height // 2) + shift_y, (width // 2) - shift_x] = 1
-            elif shift_y < 0 and shift_x >= 0:
-                kernels[i, :, (height // 2) - shift_y, (width // 2) + shift_x] = 1
-            else:
-                kernels[i, :, (height // 2) - shift_y, (width // 2) - shift_x] = 1
 
-        kernels = kernels.to(images.device)
-        # Perform the convolution
-        shifted_images = F.conv2d(input=images, weight=kernels, stride=1, padding='same', groups=channels)
+            if shift_y >= 0 and shift_x >= 0:
+                kernels[i, :, (height // 2) + shift_y, (width // 2) - shift_x] = 1
+            elif shift_y >= 0 and shift_x < 0:
+                kernels[i, :, (height // 2) + shift_y, (width // 2) + shift_x] = 1
+            elif shift_y < 0 and shift_x >= 0:
+                kernels[i, :, (height // 2) - shift_y, (width // 2) - shift_x] = 1
+            else:
+                kernels[i, :, (height // 2) - shift_y, (width // 2) + shift_x] = 1
+
+        # Perform the convolution - apply convolution to each channel separately
+        images_expanded = images.reshape(1, batch_size * channels, height, width)
+        kernels_expanded = kernels.view(batch_size * channels, 1, height, width)
+        shifted_images = F.conv2d(
+            input=images_expanded, 
+            weight=kernels_expanded, 
+            stride=1, 
+            padding='same', 
+            groups=batch_size * channels).view(batch_size, channels, height, width)
 
         return shifted_images
 
@@ -371,6 +378,7 @@ class PoseAutoencoder(AutoencoderKL):
                 
                 if self.apply_convolutional_shift_img_space:
                     dec_obj = self.apply_convolutional_shift(dec_obj, shift_x, shift_y)
+                    inp_viz = self.apply_convolutional_shift(input_im, shift_x, shift_y)
             else:
                 z_obj_pose = z_obj + enc_pose # torch.Size([4, 16, 16, 16])
                 dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
