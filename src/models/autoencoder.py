@@ -361,8 +361,8 @@ class PoseAutoencoder(AutoencoderKL):
                 else:
                     x2, y2 = x1, y1
                 
-                shift_x = x1 - x2
-                shift_y = y1 - y2
+                shift_x = x2 - x1
+                shift_y = y2 - y1
                 z_obj_pose = z_obj
                 
                 if self.apply_convolutional_shift_latent_space:
