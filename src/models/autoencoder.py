@@ -74,7 +74,9 @@ class PoseAutoencoder(AutoencoderKL):
                  ema_decay=0.999,
                  apply_convolutional_shift_img_space=False,
                  apply_convolutional_shift_latent_space=False,
-                 quantconfig=None
+                 quantconfig=None,
+                 quantize_obj=False,
+                 quantize_pose=False,
                  ):
         pl.LightningModule.__init__(self)
         self.apply_convolutional_shift_img_space = apply_convolutional_shift_img_space
@@ -99,8 +101,13 @@ class PoseAutoencoder(AutoencoderKL):
         self.encoder = FeatEncoder(**ddconfig)
         self.decoder = FeatDecoder(**ddconfig)
 
-        if quantconfig is not None:
-            self.quantize = instantiate_from_config(quantconfig)
+        if quantize_obj:
+            assert quantconfig is not None, "quantconfig is not defined but quantize_obj is set to True."
+            self.quantize_obj = instantiate_from_config(quantconfig)
+        
+        if quantize_pose:
+            assert quantconfig is not None, "quantconfig is not defined but quantize_pose is set to True."
+            self.quantize_pose = instantiate_from_config(quantconfig)
 
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
         self.loss = instantiate_from_config(lossconfig)
@@ -238,8 +245,12 @@ class PoseAutoencoder(AutoencoderKL):
         moments_obj = self.quant_conv_obj(h) # torch.Size([3, 8, 16, 16])
         pose_feat = self.quant_conv_pose(h) # torch.Size([3, 4, 16, 16])
 
-        if hasattr(self, "quantize"):
-            moments_obj, _, _ = self.quantize(moments_obj) # torch.Size([3, 8, 16, 16])
+        if hasattr(self, "quantize_obj"):
+            moments_obj, _, _ = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
+        
+        if hasattr(self, "quantize_pose"):
+            pose_feat, _, _ = self.quantize_pose(pose_feat) # torch.Size([3, 8, 16, 16])
+        
         posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
         return posterior_obj, pose_feat
     
@@ -698,8 +709,11 @@ class PoseAutoencoder(AutoencoderKL):
                                   list(self.post_quant_conv.parameters())+ \
                                   list(self.pose_encoder.parameters())+ \
                                   list(self.pose_decoder.parameters())
-        if hasattr(self, 'quantize'):
-            opt_ae_params = opt_ae_params + list(self.quantize.parameters())
+        if hasattr(self, 'quantize_obj'):
+            opt_ae_params = opt_ae_params + list(self.quantize_obj.parameters())
+        
+        if hasattr(self, 'quantize_pose'):
+            opt_ae_params = opt_ae_params + list(self.quantize_pose.parameters())
         
         opt_ae = torch.optim.Adam(opt_ae_params,
                                   lr=lr, betas=(0.5, 0.9))
