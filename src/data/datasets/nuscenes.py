@@ -40,7 +40,7 @@ class NuScenesBase(MMDetNuScenesDataset):
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
                  is_sweep=False, perturb_center=False, perturb_scale=False, 
                  negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
-                 perturb_prob=0.0, patch_center_rad_init=0.1, 
+                 perturb_prob=0.0, patch_center_rad_init=0.5, 
                  perturb_yaw=False, perturb_z=False, 
                  **kwargs):
         # Setup directory

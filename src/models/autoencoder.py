@@ -498,8 +498,9 @@ class PoseAutoencoder(AutoencoderKL):
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         
-        self._update_patch_center_rad()
-        self.log("perturb_rad", self.patch_center_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        if self.patch_center_rad is not None:
+            self._update_patch_center_rad()
+            self.log("perturb_rad", self.patch_center_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         # Get inputs in right shape
         rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
