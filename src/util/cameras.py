@@ -117,11 +117,13 @@ class PatchPerspectiveCameras(PerspectiveCameras):
     def transform_points_patch_ndc(self, points, 
                                    patch_size, 
                                    patch_center,
+                                   cam_instance=None,
                                    eps: Optional[float] = None, **kwargs) -> torch.Tensor:
         # camera --> ndc points
         points = points.to(self.device)
         # points_ndc = self.transform_points_ndc(points, eps=None)
         points_screen = self.transform_points_screen(points)
+        # Points in NDC, with 1.0 as the smaller image side and >1.0 for the longer side
         points_ndc = self.get_ndc_camera_transform().transform_points(points_screen)
         
         # ndc --> patch ndc transform
