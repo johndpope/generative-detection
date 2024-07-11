@@ -40,7 +40,7 @@ class NuScenesBase(MMDetNuScenesDataset):
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
                  is_sweep=False, perturb_center=False, perturb_scale=False, 
                  negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
-                 perturb_prob=0.0, perturb_rad_init=0.1, 
+                 perturb_prob=0.0, patch_center_rad_init=0.1, 
                  perturb_yaw=False, perturb_z=False, 
                  **kwargs):
         # Setup directory
@@ -72,8 +72,8 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.perturb_z = perturb_z
         self.DEBUG = False
         self.perturb_prob = perturb_prob
-        self.perturb_rad_init = torch.tensor(perturb_rad_init)
-        self.perturb_rad = nn.Parameter(self.perturb_rad_init, requires_grad=False) # default 0.1
+        self.patch_center_rad_init = torch.tensor(patch_center_rad_init)
+        self.patch_center_rad = nn.Parameter(self.patch_center_rad_init, requires_grad=False) # default 0.1
         
     def __len__(self):
         self.num_samples = super().__len__()
@@ -397,7 +397,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         pose_6d_no_v1v2[:, -1] = pose_6d[:, -1]
         return pose_6d_no_v1v2, bbox_sizes, yaw
     
-    def _get_perturbed_patch_center(self, center_2d, bbox):
+    def _get_shifted_patch_center(self, center_2d, bbox):
         # given: original center_2d and bbox
         x1, y1, x2, y2 = bbox
         center_x, center_y = center_2d
@@ -407,7 +407,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         bbox_height = y2 - y1
         
         # Calculate the maximum perturbation distance
-        r_max_perturb = self.perturb_rad * min(bbox_width, bbox_height)
+        r_max_perturb = self.patch_center_rad * min(bbox_width, bbox_height)
         
         # Random perturbation in x direction within the max perturbation limit
         r_max_perturb_cpu = r_max_perturb.clone().detach().cpu().numpy()
@@ -433,7 +433,7 @@ class NuScenesBase(MMDetNuScenesDataset):
             # Random Perturb of 2D BBOX Center
             center_o = cam_instance.center_2d
             bbox_o = cam_instance.bbox
-            center_perturbed = self._get_perturbed_patch_center(center_o, bbox_o)
+            center_perturbed = self._get_shifted_patch_center(center_o, bbox_o)
             # Replace Center 2D with perturbed center
             center_perturbed = [np.clip(int(center_perturbed[0]), 0, NUSC_IMG_WIDTH-1), np.clip(int(center_perturbed[1]), 0, NUSC_IMG_HEIGHT-1)]
             cam_instance.center_2d = center_perturbed

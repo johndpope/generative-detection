@@ -143,8 +143,8 @@ class PoseAutoencoder(AutoencoderKL):
         self.iter_counter = 0
 
         ### Placeholders
-        self.perturb_rad = None
-        self.perturb_rad_init = None
+        self.patch_center_rad = None
+        self.patch_center_rad_init = None
 
     @contextmanager
     def ema_scope(self, context=None):
@@ -291,7 +291,7 @@ class PoseAutoencoder(AutoencoderKL):
 
         # Apply the shifts
         grid_x = grid_x - (shifts_x_pixels.view(-1, 1, 1) * 2.0 / (width - 1))
-        grid_y = grid_y -    (shifts_y_pixels.view(-1, 1, 1) * 2.0 / (height - 1))
+        grid_y = grid_y - (shifts_y_pixels.view(-1, 1, 1) * 2.0 / (height - 1))
 
         # Stack grids and reshape to [batch_size, height, width, 2]
         grid = torch.stack((grid_x, grid_y), dim=-1)
@@ -345,21 +345,25 @@ class PoseAutoencoder(AutoencoderKL):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
+        apply_shift = self.apply_convolutional_shift_img_space or self.apply_convolutional_shift_latent_space
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float() # torch.Size([4, 3, 256, 256])
+        # Encode Image
         posterior_obj, pose_feat = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
         
+        # Sample from posterior distribution or use mode
         if sample_posterior: # True
             z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
         else:
             z_obj = posterior_obj.mode()
         
+        # Dropout object feature latents
         self.dropout_prob = self._get_dropout_prob()
-        
         if self.dropout_prob > 0:
             dropout = nn.Dropout(p=self.dropout_prob)
             z_obj = dropout(z_obj)
         
+        # Add gaussian noise to object feature latents
         if self.add_noise_to_z_obj:
             # draw from standard normal distribution
             std_normal = Normal(0, 1)
@@ -367,41 +371,43 @@ class PoseAutoencoder(AutoencoderKL):
             z_obj = z_obj + z_obj_noise
         
         # inputs: torch.Size([4, 16, 16, 16]), True
+        # Extract pose information from posterior distribution
         dec_pose, bbox_posterior = self._decode_pose(pose_feat, sample_posterior) # torch.Size([4, 8]), torch.Size([4, 7])
-        # Replace pose with other pose if supervised with other patch
-        if second_pose is not None:
-            gen_pose = second_pose.to(dec_pose)
-        else:
-            gen_pose = dec_pose
+        
         
         if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
             dec_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
-        else:
-            enc_pose = self._encode_pose(gen_pose) # torch.Size([4, 16, 16, 16])
-            
-            assert z_obj.shape == enc_pose.shape, f"z_obj shape: {z_obj.shape}, enc_pose shape: {enc_pose.shape}"
-            
-            if self.apply_convolutional_shift_img_space or self.apply_convolutional_shift_latent_space:
-                x1, y1 = pose_gt[:, 0], pose_gt[:, 1]
-                if second_pose is not None:
-                    x2, y2 = second_pose[:, 0], second_pose[:, 1]
-                else:
-                    x2, y2 = x1, y1
-                
-                shift_x = x2 - x1
-                shift_y = y2 - y1
-                z_obj_pose = z_obj
-                
-                if self.apply_convolutional_shift_latent_space:
-                    z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)
-                
-                dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
-                
-                if self.apply_convolutional_shift_img_space:
-                    dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
+        elif apply_shift:
+            # Compute shift if shift between both patches
+            if second_pose is not None:
+                shift_x = second_pose[:, 0] - pose_gt[:, 0]
+                shift_y = second_pose[:, 1] - pose_gt[:, 1]
             else:
-                z_obj_pose = z_obj + enc_pose # torch.Size([4, 16, 16, 16])
-                dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
+                shift_x = 0.0
+                shift_y = 0.0
+                
+            z_obj_pose = z_obj
+            
+            if self.apply_convolutional_shift_latent_space:
+                z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)
+            
+            dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
+            
+            if self.apply_convolutional_shift_img_space:
+                dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
+        else:
+             # Replace pose with other pose if supervised with other patch
+            if second_pose is not None:
+                gen_pose = second_pose.to(dec_pose)
+            else:
+                gen_pose = dec_pose
+                
+            enc_pose = self._encode_pose(gen_pose) # torch.Size([4, 16, 16, 16])
+        
+            assert z_obj.shape == enc_pose.shape, f"z_obj shape: {z_obj.shape}, enc_pose shape: {enc_pose.shape}"
+        
+            z_obj_pose = z_obj + enc_pose # torch.Size([4, 16, 16, 16])
+            dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
             
         return dec_obj, dec_pose, posterior_obj, bbox_posterior
 
@@ -482,20 +488,18 @@ class PoseAutoencoder(AutoencoderKL):
             
         return rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose
     
-    def _update_perturb_rad(self):
+    def _update_patch_center_rad(self):
         if self.iter_counter >= self.perturb_rad_warmup_steps:
             self.perturb_rad.data = torch.tensor(FINAL_PERTURB_RAD, requires_grad=False)
         else: # linearly decrease perturb_rad from initial value to 0.5 over 1 epoch
-            step_size = (FINAL_PERTURB_RAD - self.perturb_rad_init) / self.perturb_rad_warmup_steps 
-            current_rad = self.perturb_rad_init + (self.iter_counter * step_size)
-            self.perturb_rad.data = torch.tensor(min(current_rad, FINAL_PERTURB_RAD), requires_grad=False)
-        
-        return
+            step_size = (FINAL_PERTURB_RAD - self.patch_center_rad_init) / self.perturb_rad_warmup_steps 
+            current_rad = self.patch_center_rad_init + (self.iter_counter * step_size)
+            self.patch_center_rad.data = torch.tensor(min(current_rad, FINAL_PERTURB_RAD), requires_grad=False)
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         
-        self._update_perturb_rad()
-        self.log("perturb_rad", self.perturb_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        self._update_patch_center_rad()
+        self.log("perturb_rad", self.patch_center_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         # Get inputs in right shape
         rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
