@@ -237,11 +237,8 @@ class PoseAutoencoder(AutoencoderKL):
         h = self.encoder(x) # torch.Size([3, 32, 16, 16])
         moments_obj = self.quant_conv_obj(h) # torch.Size([3, 8, 16, 16])
         pose_feat = self.quant_conv_pose(h) # torch.Size([3, 4, 16, 16])
-        ## WIP
         if hasattr(self, "quantize"):
-            moments_obj, emb_loss_obj, info_obj = self.quantize(moments_obj) # torch.Size([3, 8, 16, 16])
-            pose_feat, emb_loss_pose, info_pose = self.quantize(pose_feat) # torch.Size([3, 4, 16, 16])
-        # WIP
+            moments_obj, _, _ = self.quantize(moments_obj) # torch.Size([3, 8, 16, 16])
         posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
         return posterior_obj, pose_feat
     
