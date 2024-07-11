@@ -70,7 +70,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.negative_sample_prob = negative_sample_prob if "background" in self.label_names else 0.0
         self.perturb_yaw = perturb_yaw
         self.perturb_z = perturb_z
-        self.DEBUG = False
+        self.DEBUG = True
         self.perturb_prob = perturb_prob
         self.patch_center_rad_init = torch.tensor(patch_center_rad_init)
         # self.patch_center_rad = nn.Parameter(self.patch_center_rad_init, requires_grad=False) # default 0.1
@@ -82,20 +82,20 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.num_cameras = len(CAMERA_NAMES)
         return self.num_samples * self.num_cameras
     
-    def _get_patch_dims(self, bbox, center_2d, img_size):
+    def _get_patch_dims(self, bbox, patch_center_2d, img_size):
         # Object BBOX
-        center_pixel_loc = np.round(center_2d).astype(np.int32)
+        center_pixel_loc = np.round(patch_center_2d).astype(np.int32)
         x1, y1, x2, y2 = np.round(bbox).astype(np.int32) 
-        width = x2 - x1
-        height = y2 - y1
+        width_2dbbox = x2 - x1
+        height_2dbbox = y2 - y1
         # get max side length
-        max_dim = max(width, height)
+        max_dim = max(width_2dbbox, height_2dbbox)
         
         # Get closest pre-defined patch size
         dim_diffs = [abs(max_dim - patch_size) for patch_size in PATCH_ANCHOR_SIZES]
         patch_size = PATCH_ANCHOR_SIZES[dim_diffs.index(min(dim_diffs))]
         
-        # Crop Patch from Image around 2D BBOX
+        # Define crop dimension for patch from image
         x1 = center_pixel_loc[0] - patch_size // 2
         y1 = center_pixel_loc[1] - patch_size // 2
         x2 = center_pixel_loc[0] + patch_size // 2
@@ -115,19 +115,15 @@ class NuScenesBase(MMDetNuScenesDataset):
             # Set to corner case to prevent further perturbations
             is_corner_case = True
         
-        patch_center = (x1 + patch_size // 2, y1 + patch_size // 2)
+        patch_center_2d = (x1 + patch_size // 2, y1 + patch_size // 2)
         
-        if int(width) > int(height):
-            padding_pixels = int(width) - int(height) 
-        else:
-            padding_pixels = 0
         # Get pixels in y direction not covered by object
-        padding_pixels = max(patch_size - height, 0)
+        padding_pixels = max(patch_size - height_2dbbox, 0)
         
         assert np.abs(x1 - x2) == np.abs(y1 - y2), f"Patch is not a square: {x1, y1, x2, y2}"
         assert np.abs(x1 - x2) in PATCH_ANCHOR_SIZES and np.abs(y1 - y2) in PATCH_ANCHOR_SIZES, f"Patch size is not in PATCH_ANCHOR_SIZES: {x1, y1, x2, y2}"
         
-        return [x1, y1, x2, y2], patch_center, padding_pixels
+        return [x1, y1, x2, y2], patch_center_2d, padding_pixels
         
     def _get_instance_mask(self, bbox, bbox_patch, patch):
         # create a boolean mask for patch with gt 2d bbox as coordinates (x1, y1, x2, y2)
@@ -152,37 +148,36 @@ class NuScenesBase(MMDetNuScenesDataset):
         # bounding box annotation (exterior rectangle of the projected 3D box), a list arrange as [x1, y1, x2, y2].
         bbox = cam_instance.bbox 
         # Projected center location on the image, a list has shape (2,)
-        center_2d = cam_instance.center_2d 
+        patch_center_2d = cam_instance.patch_center_2d 
         
         if self.DEBUG:
             # colorize center of 2d bbox
-            img_pil.putpixel((np.clip(int(center_2d[0]), 0, img_pil.size[0]-1),
-                              np.clip(int(center_2d[1]), 0, img_pil.size[1]-1)), (255, 0, 0))
+            img_pil.putpixel((np.clip(int(cam_instance.patch_center_2d_original[0]), 0, img_pil.size[0]-1),
+                              np.clip(int(cam_instance.patch_center_2d_original[1]), 0, img_pil.size[1]-1)), (255, 0, 0))
         
         # If center_2d is out bounds, return None, None, None, None since < 50% of the object is visible
-        if center_2d[0] < 0 or center_2d[1] < 0 or center_2d[0] >= img_pil.size[0] or center_2d[1] >= img_pil.size[1]:
+        if patch_center_2d[0] < 0 or patch_center_2d[1] < 0 or patch_center_2d[0] >= img_pil.size[0] or patch_center_2d[1] >= img_pil.size[1]:
             return None, None, None, None, None, None
         
         # Crop Patch from Image around 2D BBOX
-        try:
-            patch_box, patch_center, padding_pixels = self._get_patch_dims(bbox, center_2d, img_pil.size)
-            if self.DEBUG:
-                # colorize center of patch
-                img_pil.putpixel((int(patch_center[0]), int(patch_center[1])), (0, 0, 255))
+        # try:
+        patch_box, patch_center_2d, padding_pixels = self._get_patch_dims(bbox, patch_center_2d, img_pil.size)
+        if self.DEBUG:
+            # colorize center of patch
+            img_pil.putpixel((int(patch_center_2d[0]), int(patch_center_2d[1])), (0, 0, 255))
+        
+        patch = img_pil.crop(patch_box) # left, upper, right, lowe
+        patch_size_anchor = torch.tensor(patch.size, dtype=torch.float32)
+        
+        # Ratio of original image to resized image
+        resampling_factor = (self.patch_size_return[0] / patch.size[0], self.patch_size_return[1] / patch.size[1])
+        assert resampling_factor[0] == resampling_factor[1], "resampling factor of width and height must be the same but they are not."
+        # Resize Patch to Size expected by Encoder
+        patch_resized = patch.resize((self.patch_size_return[0], self.patch_size_return[1]), resample=Resampling.BILINEAR, reducing_gap=1.0)
             
-            x1, y1, x2, y2 = patch_box
-            patch = img_pil.crop((x1, y1, x2, y2)) # left, upper, right, lowe
-            patch_size_sq = torch.tensor(patch.size, dtype=torch.float32)
-            
-            # Ratio of original image to resized image
-            resampling_factor = (self.patch_size_return[0] / patch.size[0], self.patch_size_return[1] / patch.size[1])
-            assert resampling_factor[0] == resampling_factor[1], "resampling factor of width and height must be the same but they are not."
-            # Resize Patch to Size expected by Encoder
-            patch_resized = patch.resize((self.patch_size_return[0], self.patch_size_return[1]), resample=Resampling.BILINEAR, reducing_gap=1.0)
-            
-        except Exception as e:
-            logging.info(f"Error in cropping & resizing image: {e}")
-            return None, None, None, None, None, None
+        # except Exception as e:
+        #     logging.info(f"Error in cropping & resizing image: {e}")
+        #     return None, None, None, None, None, None
         
         transform = T.Compose([T.ToTensor()])
         patch_resized_tensor = transform(patch_resized)
@@ -190,7 +185,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         mask = transform(mask)
         
         padding_pixels_resampled = padding_pixels * resampling_factor[0]
-        return patch_resized_tensor, patch_center, patch_size_sq, resampling_factor, padding_pixels_resampled, mask
+        return patch_resized_tensor, patch_center_2d, patch_size_anchor, resampling_factor, padding_pixels_resampled, mask
     
     def compute_cropped_distance(self, H, H_crop, obj_dist):
         """do_crop = (H * do) / H_crop"""
@@ -308,33 +303,36 @@ class NuScenesBase(MMDetNuScenesDataset):
         roll, pitch = 0.0, 0.0 # roll and pitch are 0 for all instances in nuscenes dataset
         
         object_centroid_3D = (x, y, z)
-        patch_center = cam_instance.patch_center
+        patch_center_2d = cam_instance.patch_center_2d
         
-        if len(patch_center) == 2:
+        if len(patch_center_2d) == 2:
             # add batch dimension
-            patch_center = torch.tensor(patch_center, dtype=torch.float32).unsqueeze(0)
+            patch_center_2d = torch.tensor(patch_center_2d, dtype=torch.float32).unsqueeze(0)
        
-        object_centroid_3D = torch.tensor(object_centroid_3D, dtype=torch.float32)
-        if object_centroid_3D.dim() == 1:
-            object_centroid_3D = object_centroid_3D.view(1, 1, 3)
+        object_centroid_3D = torch.tensor(object_centroid_3D, dtype=torch.float32).reshape(1, 1, 3)
+        # if object_centroid_3D.dim() == 1:
+        #     object_centroid_3D = object_centroid_3D.view(1, 1, 3)
         
         assert object_centroid_3D.dim() == 3 or object_centroid_3D.dim() == 2, f"object_centroid_3D dim is {object_centroid_3D.dim()}"
         assert isinstance(object_centroid_3D, torch.Tensor), f"object_centroid_3D is not a torch tensor"
 
         point_patch_ndc = camera.transform_points_patch_ndc(points=object_centroid_3D,
                                                             patch_size=cam_instance.patch_size, # add delta
-                                                            patch_center=patch_center) # add scale
+                                                            patch_center=patch_center_2d,
+                                                            cam_instance=cam_instance) # add scale
         
         if self.DEBUG:
-            patch_img = T.ToPILImage()(cam_instance.patch)
-            p_w = patch_img.size[0]
-            p_h = patch_img.size[1]
+            debug_patch_img = T.ToPILImage()(cam_instance.patch)
+            p_w = debug_patch_img.size[0]
+            p_h = debug_patch_img.size[1]
             # colorize center of 3d bbox
 
             is_outofbounds = point_patch_ndc[0] < -1 or point_patch_ndc[0] > 1 or point_patch_ndc[1] < -1 or point_patch_ndc[1] > 1
             # only colorize if point_patch_ndc is within bounds
             if not is_outofbounds:
-                patch_img.putpixel((int(point_patch_ndc[0] * p_w/2 + p_w/2), int(point_patch_ndc[1] * p_h/2 + p_h/2)), (0, 255, 0))
+                debug_patch_img.putpixel((int(point_patch_ndc[0] * p_w/2 + p_w/2), int(point_patch_ndc[1] * p_h/2 + p_h/2)), (0, 255, 0))
+        else:
+            debug_patch_img = None
         
         # TODO: scale z values from camera to learned
         z_world = z
@@ -397,7 +395,11 @@ class NuScenesBase(MMDetNuScenesDataset):
         pose_6d_no_v1v2[:, :3] = pose_6d[:, :POSE_DIM-1]
         # set v3 as last val
         pose_6d_no_v1v2[:, -1] = pose_6d[:, -1]
-        return pose_6d_no_v1v2, bbox_sizes, yaw
+        
+        # Manually set translation
+        pose_6d_no_v1v2[:, :3] = translation
+        
+        return pose_6d_no_v1v2, bbox_sizes, yaw, debug_patch_img
     
     def _get_shifted_patch_center(self, center_2d, bbox):
         # given: original center_2d and bbox
@@ -408,46 +410,45 @@ class NuScenesBase(MMDetNuScenesDataset):
         bbox_width = x2 - x1
         bbox_height = y2 - y1
         
-        # Calculate the maximum perturbation distance
+        # Calculate the maximum shift distance
         assert not self.patch_center_rad.is_cuda, "self.patch_center_rad.device must be on cpu"
-        r_max_perturb = self.patch_center_rad * min(bbox_width, bbox_height)
+        r_max_shift = self.patch_center_rad * min(bbox_width, bbox_height)
         
         # Random perturbation in x direction within the max perturbation limit
-        r_max_perturb_cpu = r_max_perturb.clone().detach().cpu().numpy()
-        x_perturb = np.random.uniform(-r_max_perturb_cpu, r_max_perturb_cpu)
+        r_max_shift = r_max_shift.clone().detach().cpu().numpy()
+        x_shifted = np.random.uniform(-r_max_shift, r_max_shift)
         
         # Calculate corresponding y perturbation to maintain visibility condition
-
-        max_y_perturb = np.sqrt(r_max_perturb_cpu**2 - x_perturb**2)
-        y_perturb = np.random.uniform(-max_y_perturb, max_y_perturb)
+        max_y_shift = np.sqrt(r_max_shift**2 - x_shifted**2)
+        y_shifted = np.random.uniform(-max_y_shift, max_y_shift)
         
         # Perturbed center coordinates
-        perturbed_center_x = int(center_x + x_perturb)
-        perturbed_center_y = int(center_y + y_perturb)
+        shifted_center_x = int(center_x + x_shifted)
+        shifted_center_y = int(center_y + y_shifted)
         
-        return [perturbed_center_x, perturbed_center_y]
+        return [shifted_center_x, shifted_center_y]
     
     def _get_patchGT(self, cam_instance, img_path, cam2img, postfix=""):
         cam_instance = edict(cam_instance)
         
         # Mask needs 
-        
+        cam_instance.patch_center_2d_original = cam_instance.center_2d
         if self.perturb_center:
-            # Random Perturb of 2D BBOX Center
-            center_o = cam_instance.center_2d
-            bbox_o = cam_instance.bbox
-            center_perturbed = self._get_shifted_patch_center(center_o, bbox_o)
-            # Replace Center 2D with perturbed center
-            center_perturbed = [np.clip(int(center_perturbed[0]), 0, NUSC_IMG_WIDTH-1), np.clip(int(center_perturbed[1]), 0, NUSC_IMG_HEIGHT-1)]
-            cam_instance.center_2d = center_perturbed
+            # Random shift of 2D BBOX Center
+            shifted_patch_center = self._get_shifted_patch_center(cam_instance.center_2d, cam_instance.bbox)
+            # Replace Center 2D with shifted center inside image bounds
+            shifted_patch_center = [np.clip(int(shifted_patch_center[0]), 0, NUSC_IMG_WIDTH-1), np.clip(int(shifted_patch_center[1]), 0, NUSC_IMG_HEIGHT-1)]
+            cam_instance.center_2d = shifted_patch_center
+            cam_instance.patch_center_2d = shifted_patch_center
         
         # Crop patch from origibal image
-        patch, patch_center, patch_size_original, resampling_factor, padding_pixels_resampled, mask_2d_bbox = self._get_instance_patch(img_path, cam_instance)
+        patch, patch_center_2d, patch_size_original, resampling_factor, padding_pixels_resampled, mask_2d_bbox = self._get_instance_patch(img_path, cam_instance)
         
-        if patch is None or patch_size_original is None:
-            return None
+        # if patch is None or patch_size_original is None:
+        #     return None
         
-        fill_factor = padding_pixels_resampled /self.patch_size_return[0]
+        # Compute fill factor in pixels
+        fill_factor = padding_pixels_resampled / self.patch_size_return[0]
         
         # if no batch dimension, add it
         if patch_size_original.dim() == 1:
@@ -455,30 +456,29 @@ class NuScenesBase(MMDetNuScenesDataset):
             
         # Update Cam Instance with new patch and center_2d
         cam_instance.update({'patch': patch,
-                             'patch_center': patch_center,
-                             'center_2d': patch_center,
+                             'patch_center': patch_center_2d,
+                             'center_2d': patch_center_2d,
                              'patch_size': patch_size_original,
                              'resampling_factor': resampling_factor,
                              'fill_factor': fill_factor,
                              'mask_2d_bbox': mask_2d_bbox})
         
+        # Setup Patch Camera
+        image_size = [(NUSC_IMG_HEIGHT, NUSC_IMG_WIDTH)]
+        
         # make 4x4 matrix from 3x3 camera matrix
         K = torch.zeros(4, 4, dtype=torch.float32)
         
         K[:3, :3] = torch.tensor(cam2img, dtype=torch.float32)
-        K_orig = K.clone().detach().requires_grad_(False)
+        
         K[2, 2] = 0.0
         K[2, 3] = 1.0
         K[3, 2] = 1.0
-        K = K.clone().detach().requires_grad_(False).unsqueeze(0) # add batch dimension
+        K = K.clone().unsqueeze(0) # add batch dimension
         
-        image_size = [(NUSC_IMG_HEIGHT, NUSC_IMG_WIDTH)]
-            
-        focal_length = K[..., 0, 0] # shape (1,)
         principal_point = K[..., :2, 2] # shape (1, 2)
-        
         # negate focal length
-        focal_length = -focal_length
+        focal_length = -K[..., 0, 0] # shape (1,)
         
         # Create Camera Object
         camera = PatchCameras(
@@ -496,13 +496,16 @@ class NuScenesBase(MMDetNuScenesDataset):
         # center_2d = center_2d.unsqueeze(0)
         # if no instances add 6d vec of zeroes for pose, 3 d vec of zeroes for bbox sizes and -1 for class id
         
-        pose_6d, bbox_sizes, yaw = self._get_pose_6d_lhw(camera, cam_instance)
+        pose_6d, bbox_sizes, yaw, debug_patch_img = self._get_pose_6d_lhw(camera, cam_instance)
+        if debug_patch_img is not None and self.DEBUG:
+            cam_instance.patch = T.ToTensor()(debug_patch_img)
+            
         cam_instance.pose_6d, cam_instance.bbox_sizes, cam_instance.yaw = pose_6d, bbox_sizes, yaw
         
-        cam_instance.v3_pert, cam_instance.yaw_perturbed = self._get_pose_6d_perturbed(cam_instance)
-        pose_pert = cam_instance.pose_6d.clone()
-        pose_pert[:, -1] = cam_instance.v3_pert
-        cam_instance.pose_6d_perturbed = pose_pert
+        # cam_instance.v3_pert, cam_instance.yaw_perturbed = self._get_pose_6d_perturbed(cam_instance)
+        # pose_pert = cam_instance.pose_6d.clone()
+        # pose_pert[:, -1] = cam_instance.v3_pert
+        # cam_instance.pose_6d_perturbed = pose_pert
         if cam_instance.pose_6d is None or cam_instance.bbox_sizes is None:
             return None
         

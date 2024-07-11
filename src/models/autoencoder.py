@@ -391,7 +391,7 @@ class PoseAutoencoder(AutoencoderKL):
             
             dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
             
-            if self.apply_convolutional_shift_img_space:
+            if self.apply_convolutional_shift_img_space and not self.apply_convolutional_shift_latent_space:
                 dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
         else:
              # Replace pose with other pose if supervised with other patch
