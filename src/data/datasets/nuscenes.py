@@ -73,7 +73,9 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.DEBUG = False
         self.perturb_prob = perturb_prob
         self.patch_center_rad_init = torch.tensor(patch_center_rad_init)
-        self.patch_center_rad = nn.Parameter(self.patch_center_rad_init, requires_grad=False) # default 0.1
+        # self.patch_center_rad = nn.Parameter(self.patch_center_rad_init, requires_grad=False) # default 0.1
+        self.patch_center_rad = self.patch_center_rad_init # default 0.5
+        assert not self.patch_center_rad.is_cuda, "self.patch_center_rad.device must be on cpu"
         
     def __len__(self):
         self.num_samples = super().__len__()
@@ -407,6 +409,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         bbox_height = y2 - y1
         
         # Calculate the maximum perturbation distance
+        assert not self.patch_center_rad.is_cuda, "self.patch_center_rad.device must be on cpu"
         r_max_perturb = self.patch_center_rad * min(bbox_width, bbox_height)
         
         # Random perturbation in x direction within the max perturbation limit
