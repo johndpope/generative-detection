@@ -393,7 +393,7 @@ class PoseAutoencoder(AutoencoderKL):
             
             dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
             
-            if self.apply_convolutional_shift_img_space:
+            if self.apply_convolutional_shift_img_space and not self.apply_convolutional_shift_latent_space:
                 dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
         else:
              # Replace pose with other pose if supervised with other patch
@@ -503,37 +503,6 @@ class PoseAutoencoder(AutoencoderKL):
         
         # Get inputs in right shape
         rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
-        
-        
-        
-        ########
-        k = 2
-        hw = rgb_in.shape[-1]
-        
-        
-        
-        test_rgb_in = rgb_in[k].permute(1, 2, 0).clone().cpu().numpy() 
-        test_rgb_in[:, 128] = [1,1,1]
-        test_rgb_in[128, :] = [1,1,1]
-        xy_in = (pose_gt[k].cpu().numpy() * (hw //2) + hw //2).astype(int)[:2]
-        # test_rgb_in[xy_in[1], xy_in[0]] = [1, 0, 0]
-        print((pose_gt[k, :2]*hw).to(int))
-        
-        test_rgb_gt = rgb_gt[k].permute(1, 2, 0).clone().cpu().numpy()   
-        test_rgb_gt[:, 128] = [1,1,1]
-        test_rgb_gt[128, :] = [1,1,1]     
-        xy_gt = (second_pose[k].cpu().numpy() * (hw //2) + hw //2).astype(int)[:2] 
-        # test_rgb_gt[xy_gt[1], xy_gt[0]] = [1, 0, 0]
-        print((second_pose[k, :2]*hw).to(int))
-        
-        
-        shift_x = second_pose[:, 0] - pose_gt[:, 0]
-        shift_y = second_pose[:, 1] - pose_gt[:, 1]
-        in_shifted = self.apply_manual_shift(rgb_in, shift_x, shift_y)
-        in_gt_plus = in_shifted*0.5 + rgb_gt*0.5
-        in_gt_minus = torch.abs(in_shifted - rgb_gt)
-        
-        #######
         
         # Run full forward pass
         dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt, second_pose=second_pose)
