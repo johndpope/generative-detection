@@ -70,7 +70,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.negative_sample_prob = negative_sample_prob if "background" in self.label_names else 0.0
         self.perturb_yaw = perturb_yaw
         self.perturb_z = perturb_z
-        self.DEBUG = True
+        self.DEBUG = False
         self.perturb_prob = perturb_prob
         self.patch_center_rad_init = torch.tensor(patch_center_rad_init)
         # self.patch_center_rad = nn.Parameter(self.patch_center_rad_init, requires_grad=False) # default 0.1
