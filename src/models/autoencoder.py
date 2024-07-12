@@ -77,6 +77,7 @@ class PoseAutoencoder(AutoencoderKL):
                  quantconfig=None,
                  quantize_obj=False,
                  quantize_pose=False,
+                 adaptiveconvconfig=None,
                  ):
         pl.LightningModule.__init__(self)
         self.apply_convolutional_shift_img_space = apply_convolutional_shift_img_space
@@ -108,6 +109,9 @@ class PoseAutoencoder(AutoencoderKL):
         if quantize_pose:
             assert quantconfig is not None, "quantconfig is not defined but quantize_pose is set to True."
             self.quantize_pose = instantiate_from_config(quantconfig)
+
+        if adaptiveconvconfig is not None:
+            self.adaptive_conv2d = instantiate_from_config(adaptiveconvconfig)
 
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
         self.loss = instantiate_from_config(lossconfig)
@@ -714,6 +718,9 @@ class PoseAutoencoder(AutoencoderKL):
         
         if hasattr(self, 'quantize_pose'):
             opt_ae_params = opt_ae_params + list(self.quantize_pose.parameters())
+
+        if hasattr(self, "adaptive_conv2d"):
+            opt_ae_params = opt_ae_params + list(self.adaptive_conv2d.parameters())
         
         opt_ae = torch.optim.Adam(opt_ae_params,
                                   lr=lr, betas=(0.5, 0.9))

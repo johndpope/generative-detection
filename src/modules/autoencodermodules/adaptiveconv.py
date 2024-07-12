@@ -19,6 +19,27 @@ from torch_utils.ops import bias_act
 from torch_utils.ops import fma
 
 #----------------------------------------------------------------------------
+class AdaptiveConv2dLayer(SynthesisLayer):
+    def __init__(self, 
+                in_channels, 
+                out_channels, 
+                w_dim, 
+                resolution, 
+                kernel_size=3, 
+                up=2, 
+                use_noise=True, 
+                activation='lrelu', 
+                resample_filter=[1,3,3,1], 
+                conv_clamp=256, 
+                channels_last=False):
+        super().__init__(in_channels, out_channels, w_dim, resolution, \
+            kernel_size, up, use_noise, activation, resample_filter, \
+                conv_clamp, channels_last)
+    
+    def forward(self, x, w, noise_mode='random', fused_modconv=True, gain=1):
+        return super().forward(x, w, noise_mode, fused_modconv, gain)
+
+#----------------------------------------------------------------------------
 
 @misc.profiled_function
 def modulated_conv2d(
@@ -119,16 +140,16 @@ class FullyConnectedLayer(torch.nn.Module):
 @persistence.persistent_class
 class SynthesisLayer(torch.nn.Module):
     def __init__(self,
-        in_channels = 512,                    # Number of input channels.
-        out_channels = 512,                   # Number of output channels.
-        w_dim=512,                          # Intermediate latent (W) dimensionality.
-        resolution=16,                     # Resolution of this layer.
+        in_channels,                    # Number of input channels.
+        out_channels,                   # Number of output channels.
+        w_dim,                          # Intermediate latent (W) dimensionality.
+        resolution,                     # Resolution of this layer.
         kernel_size     = 3,            # Convolution kernel size.
         up              = 2,            # Integer upsampling factor.
         use_noise       = True,         # Enable noise input?
         activation      = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-        conv_clamp      = 256,         # Clamp the output of convolution layers to +-X, None = disable clamping.
+        conv_clamp      = 256,          # Clamp the output of convolution layers to +-X, None = disable clamping.
         channels_last   = False,        # Use channels_last format for the weights?
     ):
         super().__init__()
