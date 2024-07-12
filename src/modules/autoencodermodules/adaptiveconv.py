@@ -18,29 +18,6 @@ from torch_utils.ops import upfirdn2d
 from torch_utils.ops import bias_act
 from torch_utils.ops import fma
 
-#----------------------------------------------------------------------------
-class AdaptiveConv2dLayer(SynthesisLayer):
-    def __init__(self, 
-                in_channels, 
-                out_channels, 
-                w_dim, 
-                resolution, 
-                kernel_size=3, 
-                up=2, 
-                use_noise=True, 
-                activation='lrelu', 
-                resample_filter=[1,3,3,1], 
-                conv_clamp=256, 
-                channels_last=False):
-        super().__init__(in_channels, out_channels, w_dim, resolution, \
-            kernel_size, up, use_noise, activation, resample_filter, \
-                conv_clamp, channels_last)
-    
-    def forward(self, x, w, noise_mode='random', fused_modconv=True, gain=1):
-        return super().forward(x, w, noise_mode, fused_modconv, gain)
-
-#----------------------------------------------------------------------------
-
 @misc.profiled_function
 def modulated_conv2d(
     x,                          # Input tensor of shape [batch_size, in_channels, in_height, in_width].

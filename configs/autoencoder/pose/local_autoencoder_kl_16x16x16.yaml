@@ -3,7 +3,7 @@ model:
   target: src.models.autoencoder.PoseAutoencoder
   params:
     adaptiveconvconfig:
-      target: src.modules.autoencodermodules.adaptiveconv.AdaptiveConv2dLayer
+      target: src.modules.autoencodermodules.adaptiveconv.SynthesisLayer
       params:
         in_channels: 16
         out_channels: 16

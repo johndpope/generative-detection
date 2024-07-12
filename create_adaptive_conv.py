@@ -20,7 +20,7 @@ def instantiate_from_config(config):
 
 def main():
     synthesis_layer_kwargs = {
-        "target": "src.modules.autoencodermodules.adaptiveconv.AdaptiveConv2dLayer",
+        "target": "src.modules.autoencodermodules.adaptiveconv.SynthesisLayer",
         "params":{
             "in_channels": 16,
             "out_channels": 16,
