@@ -111,7 +111,8 @@ class PoseAutoencoder(AutoencoderKL):
             self.quantize_pose = instantiate_from_config(quantconfig)
 
         if adaptiveconvconfig is not None:
-            self.adaptive_conv2d = instantiate_from_config(adaptiveconvconfig)
+            self.encoder_adaptive_conv2d = instantiate_from_config(adaptiveconvconfig)
+            self.decoder_adaptive_conv2d = instantiate_from_config(adaptiveconvconfig)
 
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
         self.loss = instantiate_from_config(lossconfig)
@@ -246,8 +247,8 @@ class PoseAutoencoder(AutoencoderKL):
     def encode(self, x):
         x = x.to(self.device) # torch.Size([3, 3, 256, 256])
         h = self.encoder(x) # torch.Size([3, 32, 16, 16])
-        moments_obj = self.quant_conv_obj(h) # torch.Size([3, 8, 16, 16])
-        pose_feat = self.quant_conv_pose(h) # torch.Size([3, 4, 16, 16])
+        moments_obj = self.quant_conv_obj(h) # torch.Size([3, 32, 16, 16])
+        pose_feat = self.quant_conv_pose(h) # torch.Size([3, 16, 16, 16])
 
         if hasattr(self, "quantize_obj"):
             moments_obj, _, _ = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
@@ -719,8 +720,11 @@ class PoseAutoencoder(AutoencoderKL):
         if hasattr(self, 'quantize_pose'):
             opt_ae_params = opt_ae_params + list(self.quantize_pose.parameters())
 
-        if hasattr(self, "adaptive_conv2d"):
-            opt_ae_params = opt_ae_params + list(self.adaptive_conv2d.parameters())
+        if hasattr(self, "encoder_adaptive_conv2d"):
+            opt_ae_params = opt_ae_params + list(self.encoder_adaptive_conv2d.parameters())
+
+        if hasattr(self, "decoder_adaptive_conv2d"):
+            opt_ae_params = opt_ae_params + list(self.decoder_adaptive_conv2d.parameters())
         
         opt_ae = torch.optim.Adam(opt_ae_params,
                                   lr=lr, betas=(0.5, 0.9))

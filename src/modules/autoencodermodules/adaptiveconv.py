@@ -122,7 +122,7 @@ class SynthesisLayer(torch.nn.Module):
         w_dim,                          # Intermediate latent (W) dimensionality.
         resolution,                     # Resolution of this layer.
         kernel_size     = 3,            # Convolution kernel size.
-        up              = 2,            # Integer upsampling factor.
+        up              = 1,            # Integer upsampling factor.
         use_noise       = True,         # Enable noise input?
         activation      = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
