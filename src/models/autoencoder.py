@@ -99,7 +99,7 @@ class PoseAutoencoder(AutoencoderKL):
         self.image_mask_key = image_mask_key
         self.encoder = FeatEncoder(**ddconfig)
         self.decoder = FeatDecoder(**ddconfig)
-
+        
         if quantize_obj:
             assert quantconfig is not None, "quantconfig is not defined but quantize_obj is set to True."
             self.quantize_obj = instantiate_from_config(quantconfig)
@@ -111,7 +111,9 @@ class PoseAutoencoder(AutoencoderKL):
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
         self.loss = instantiate_from_config(lossconfig)
         assert ddconfig["double_z"]
-        self.quant_conv_obj = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
+
+        quant_conv_obj_embed_dim = embed_dim if hasattr(self, "quantize_obj") else 2*embed_dim
+        self.quant_conv_obj = torch.nn.Conv2d(2*ddconfig["z_channels"], quant_conv_obj_embed_dim, 1)
         self.quant_conv_pose = torch.nn.Conv2d(2*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         self.embed_dim = embed_dim
@@ -248,14 +250,14 @@ class PoseAutoencoder(AutoencoderKL):
         info_obj = (None, None, None)
         info_pose = (None, None, None)
         if hasattr(self, "quantize_obj"):
-            moments_obj, emb_loss_obj, info_obj = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
+            posterior_obj, emb_loss_obj, info_obj = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
             emb_loss += emb_loss_obj
-
+        else:
+            posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
+        
         if hasattr(self, "quantize_pose"):
             pose_feat, emb_loss_pose, info_pose = self.quantize_pose(pose_feat) # torch.Size([3, 8, 16, 16])
             emb_loss += emb_loss_pose
-
-        posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
 
         return posterior_obj, pose_feat, emb_loss, info_obj, info_pose
     
@@ -367,7 +369,7 @@ class PoseAutoencoder(AutoencoderKL):
         
         # Sample from posterior distribution or use mode
 
-        take_sample = False if hasattr("quantize_obj") else True
+        take_sample = not hasattr(self, 'quantize_obj')
         if take_sample:
             if sample_posterior: # True
                 z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])

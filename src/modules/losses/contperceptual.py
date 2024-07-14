@@ -273,10 +273,17 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         rec_loss = self._get_rec_loss(inputs_rgb, reconstructions_rgb, use_pixel_loss)
         nll_loss, weighted_nll_loss = self._get_nll_loss(rec_loss, mask_bg, weights)
         
-        kl_loss_obj = self._get_kl_loss(posterior_obj, mask_bg)
+        # check if posterior_obj is a DiagonalGaussianDistrubution
+        if isinstance(posterior_obj, DiagonalGaussianDistribution):
+            kl_loss_obj = self._get_kl_loss(posterior_obj, mask_bg)
+        else:
+            kl_loss_obj = torch.tensor(0.0).to(rgb_gt.device)
         
-        kl_loss_obj_bbox = self.compute_pose_kl_loss(bbox_posterior, mask_bg, class_gt_label)
-    
+        if isinstance(bbox_posterior, DiagonalGaussianDistribution):
+            kl_loss_obj_bbox = self.compute_pose_kl_loss(bbox_posterior, mask_bg, class_gt_label)
+        else:
+            kl_loss_obj_bbox = torch.tensor(0.0).to(rgb_gt.device)
+        
         # now the GAN part
         if optimizer_idx == 0:
             # generator update
