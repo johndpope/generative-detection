@@ -2,20 +2,6 @@ model:
   base_learning_rate: 4.5e-6
   target: src.models.autoencoder.PoseAutoencoder
   params:
-    adaptiveconvconfig:
-      target: src.modules.autoencodermodules.adaptiveconv.SynthesisLayer
-      params:
-        in_channels: 16
-        out_channels: 16
-        w_dim: 13
-        resolution: 16
-        kernel_size: 3
-        up: 1
-        use_noise: True
-        activation: lrelu
-        resample_filter: null
-        conv_clamp: 256
-        channels_last: False
     quantconfig:
       target: ldm.models.autoencoder.VectorQuantizer
       params:
@@ -40,6 +26,7 @@ model:
       params:
         use_mask_loss: False
         encoder_pretrain_steps: 0
+        codebook_weight: 1000
         disc_start: 0
         kl_weight_obj: 1.0e-05
         kl_weight_bbox: 0.01

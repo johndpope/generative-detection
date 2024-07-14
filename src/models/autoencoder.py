@@ -77,7 +77,6 @@ class PoseAutoencoder(AutoencoderKL):
                  quantconfig=None,
                  quantize_obj=False,
                  quantize_pose=False,
-                 adaptiveconvconfig=None,
                  ):
         pl.LightningModule.__init__(self)
         self.apply_convolutional_shift_img_space = apply_convolutional_shift_img_space
@@ -109,10 +108,6 @@ class PoseAutoencoder(AutoencoderKL):
         if quantize_pose:
             assert quantconfig is not None, "quantconfig is not defined but quantize_pose is set to True."
             self.quantize_pose = instantiate_from_config(quantconfig)
-
-        if adaptiveconvconfig is not None:
-            self.encoder_adaptive_conv2d = instantiate_from_config(adaptiveconvconfig)
-            self.decoder_adaptive_conv2d = instantiate_from_config(adaptiveconvconfig)
 
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
         self.loss = instantiate_from_config(lossconfig)
@@ -249,15 +244,21 @@ class PoseAutoencoder(AutoencoderKL):
         h = self.encoder(x) # torch.Size([3, 32, 16, 16])
         moments_obj = self.quant_conv_obj(h) # torch.Size([3, 32, 16, 16])
         pose_feat = self.quant_conv_pose(h) # torch.Size([3, 16, 16, 16])
-
+        
+        emb_loss = 0.0
+        info_obj = (None, None, None)
+        info_pose = (None, None, None)
         if hasattr(self, "quantize_obj"):
-            moments_obj, _, _ = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
-        
+            moments_obj, emb_loss_obj, info_obj = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
+            emb_loss += emb_loss_obj
+
         if hasattr(self, "quantize_pose"):
-            pose_feat, _, _ = self.quantize_pose(pose_feat) # torch.Size([3, 8, 16, 16])
-        
+            pose_feat, emb_loss_pose, info_pose = self.quantize_pose(pose_feat) # torch.Size([3, 8, 16, 16])
+            emb_loss += emb_loss_pose
+
         posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
-        return posterior_obj, pose_feat
+
+        return posterior_obj, pose_feat, emb_loss, info_obj, info_pose
     
     def _get_dropout_prob(self):
         """
@@ -345,7 +346,7 @@ class PoseAutoencoder(AutoencoderKL):
 
         return shifted_images
 
-    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None):
+    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, return_pred_indices=False):
         """
         Forward pass of the autoencoder model.
         
@@ -363,7 +364,7 @@ class PoseAutoencoder(AutoencoderKL):
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float() # torch.Size([4, 3, 256, 256])
         # Encode Image
-        posterior_obj, pose_feat = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
+        posterior_obj, pose_feat, emb_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
         
         # Sample from posterior distribution or use mode
         if sample_posterior: # True
@@ -422,8 +423,11 @@ class PoseAutoencoder(AutoencoderKL):
         
             z_obj_pose = z_obj + enc_pose # torch.Size([4, 16, 16, 16])
             dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
-            
-        return dec_obj, dec_pose, posterior_obj, bbox_posterior
+        
+
+        if return_pred_indices:
+            return dec_obj, dec_pose, posterior_obj, bbox_posterior, emb_loss, ind_obj, ind_pose
+        return dec_obj, dec_pose, posterior_obj, bbox_posterior, emb_loss
 
     def get_pose_input(self, batch, k, postfix=""):
         x = batch[k+postfix] 
@@ -520,7 +524,7 @@ class PoseAutoencoder(AutoencoderKL):
         rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
         
         # Run full forward pass
-        dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt, second_pose=second_pose)
+        dec_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True)
         
         self.log("dropout_prob", self.dropout_prob, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.iter_counter += 1
@@ -531,7 +535,9 @@ class PoseAutoencoder(AutoencoderKL):
                                             dec_obj, dec_pose,
                                             class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                                             posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
-                                            last_layer=self.get_last_layer(), split="train")            
+                                            last_layer=self.get_last_layer(), split="train",
+                                            qloss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
+                                                    
             self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
@@ -546,7 +552,7 @@ class PoseAutoencoder(AutoencoderKL):
                                                 dec_obj, dec_pose,
                                                 class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                                                 posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
-                                                last_layer=self.get_last_layer(), split="train")
+                                                last_layer=self.get_last_layer(), split="train", qloss=q_loss)
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
@@ -563,21 +569,23 @@ class PoseAutoencoder(AutoencoderKL):
                 fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
         
         # Run full forward pass
-        dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt, second_pose=second_pose)
+        dec_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True)
         
         _, log_dict_ae = self.loss(rgb_gt, mask_gt, pose_gt,
                                       dec_obj, dec_pose,
                                       class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                       posterior_obj, bbox_posterior, 0, 
                                       global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
-                                      last_layer=self.get_last_layer(), split="val")
+                                      last_layer=self.get_last_layer(), split="val",
+                                      qloss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
 
         _, log_dict_disc = self.loss(rgb_gt, mask_gt, pose_gt,
                                         dec_obj, dec_pose,
                                         class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                         posterior_obj, bbox_posterior, 1, 
                                         global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
-                                        last_layer=self.get_last_layer(), split="val")
+                                        last_layer=self.get_last_layer(), split="val", 
+                                        qloss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
 
         self.log("val/rec_loss", log_dict_ae["val/rec_loss"], sync_dist=True)
         del log_dict_ae["val/rec_loss"]
@@ -635,7 +643,7 @@ class PoseAutoencoder(AutoencoderKL):
     def _get_valid_patches(self, input_patches, global_patch_index):
         local_patch_idx = torch.arange(len(global_patch_index))
         # Run encoder
-        posterior_obj, pose_feat = self.encode(input_patches)
+        posterior_obj, pose_feat, emb_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_patches)
         z_obj = posterior_obj.mode()
         dec_pose, bbox_posterior  = self._decode_pose(pose_feat, sample_posterior=False)
         
@@ -720,12 +728,6 @@ class PoseAutoencoder(AutoencoderKL):
         if hasattr(self, 'quantize_pose'):
             opt_ae_params = opt_ae_params + list(self.quantize_pose.parameters())
 
-        if hasattr(self, "encoder_adaptive_conv2d"):
-            opt_ae_params = opt_ae_params + list(self.encoder_adaptive_conv2d.parameters())
-
-        if hasattr(self, "decoder_adaptive_conv2d"):
-            opt_ae_params = opt_ae_params + list(self.decoder_adaptive_conv2d.parameters())
-        
         opt_ae = torch.optim.Adam(opt_ae_params,
                                   lr=lr, betas=(0.5, 0.9))
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
@@ -754,8 +756,8 @@ class PoseAutoencoder(AutoencoderKL):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
 
-        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, pose_gt, second_pose=second_pose)
-        xrec, poserec, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt)
+        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, emb_loss = self.forward(rgb_in, pose_gt, second_pose=second_pose)
+        xrec, poserec, posterior_obj, bbox_posterior, emb_loss = self.forward(rgb_in, pose_gt)
         
         xrec_rgb = xrec[:, :3, :, :] # torch.Size([8, 3, 64, 64])
         xrec_rgb_2 = xrec_2[:, :3, :, :] # torch.Size([8, 3, 64, 64])
@@ -801,7 +803,7 @@ class PoseAutoencoder(AutoencoderKL):
         for idx, snd_pose in enumerate(second_pose):
             # torch.Size([1, 4])
             snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
-            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, pose_gt, second_pose=snd_pose)
+            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, emb_loss = self.forward(rgb_in, pose_gt, second_pose=snd_pose)
             xrec_rgb_2 = xrec_2[:, :3, :, :]    
 
             if rgb_in_viz.shape[1] > 3:
