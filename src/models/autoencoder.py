@@ -69,7 +69,7 @@ class PoseAutoencoder(AutoencoderKL):
                  pose_conditioned_generation_steps=10000,
                  perturb_rad_warmup_steps=100000,
                  intermediate_img_feature_leak_steps=0,
-                 add_noise_to_z_obj=True,
+                 add_noise_to_z_obj=False,
                  train_on_yaw=True,
                  ema_decay=0.999,
                  apply_convolutional_shift_img_space=False,
@@ -89,7 +89,6 @@ class PoseAutoencoder(AutoencoderKL):
         self.dropout_prob = self.dropout_prob_init
         self.dropout_warmup_steps = dropout_warmup_steps # 10000 (after stage 1: encoder pretraining)
         self.pose_conditioned_generation_steps = pose_conditioned_generation_steps # 10000
-        self.add_noise_to_z_obj = add_noise_to_z_obj
         self.feature_dims = feat_dims
         self.image_rgb_key = image_rgb_key
         self.pose_key = pose_key
@@ -367,10 +366,15 @@ class PoseAutoencoder(AutoencoderKL):
         posterior_obj, pose_feat, emb_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
         
         # Sample from posterior distribution or use mode
-        if sample_posterior: # True
-            z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
+
+        take_sample = False if hasattr("quantize_obj") else True
+        if take_sample:
+            if sample_posterior: # True
+                z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
+            else:
+                z_obj = posterior_obj.mode()
         else:
-            z_obj = posterior_obj.mode()
+            z_obj = posterior_obj
         
         # Dropout object feature latents
         self.dropout_prob = self._get_dropout_prob()
@@ -379,11 +383,11 @@ class PoseAutoencoder(AutoencoderKL):
             z_obj = dropout(z_obj)
         
         # Add gaussian noise to object feature latents
-        if self.add_noise_to_z_obj:
-            # draw from standard normal distribution
-            std_normal = Normal(0, 1)
-            z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
-            z_obj = z_obj + z_obj_noise
+        # if self.add_noise_to_z_obj:
+        #     # draw from standard normal distribution
+        #     std_normal = Normal(0, 1)
+        #     z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
+        #     z_obj = z_obj + z_obj_noise
         
         # inputs: torch.Size([4, 16, 16, 16]), True
         # Extract pose information from posterior distribution

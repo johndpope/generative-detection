@@ -19,7 +19,6 @@ model:
     dropout_prob_final: 0.0
     pose_conditioned_generation_steps: 0
     dropout_warmup_steps: 0
-    add_noise_to_z_obj: True
     train_on_yaw: True
     lossconfig:
       target: src.modules.losses.PoseLoss
