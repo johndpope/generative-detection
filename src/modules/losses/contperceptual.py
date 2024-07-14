@@ -308,21 +308,21 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
                 # train only pose loss
                 loss = weighted_pose_loss \
                     + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
-                    + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * codebook_loss.mean())
+                    + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * qloss.mean())
             else:
                 if global_step >= self.encoder_pretrain_steps: # train rec loss only after encoder_pretrain_steps
                     loss = weighted_pose_loss + weighted_mask_loss + weighted_nll_loss \
                         + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
                     + (self.kl_weight_obj * kl_loss_obj) + (self.kl_weight_bbox * kl_loss_obj_bbox) \
-                        + d_weight * disc_factor * g_loss + (self.codebook_weight * codebook_loss.mean())
+                        + d_weight * disc_factor * g_loss + (self.codebook_weight * qloss.mean())
                 else: # train only pose loss before encoder_pretrain_steps
                     loss = weighted_pose_loss \
                         + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
-                        + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * codebook_loss.mean())
+                        + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * qloss.mean())
                 
             log =  {"{}/total_loss".format(split): loss.clone().detach().mean(), 
                     "{}/logvar".format(split): self.logvar.detach(),
-                    "{}/quant_loss".format(split): codebook_loss.detach().mean(),
+                    "{}/quant_loss".format(split): qloss.detach().mean(),
                     "{}/kl_loss_obj".format(split): kl_loss_obj.detach().mean(), 
                     "{}/nll_loss".format(split): nll_loss.detach().mean(),
                     "{}/weighted_nll_loss".format(split): weighted_nll_loss.detach().mean(),
