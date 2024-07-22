@@ -185,6 +185,8 @@ class NuScenesBase(MMDetNuScenesDataset):
         mask = self._get_instance_mask(bbox, patch_box, patch)
         mask = transform(mask)
         
+        if resampling_factor is None:
+            a=0
         padding_pixels_resampled = padding_pixels * resampling_factor[0]
         return patch_resized_tensor, patch_center_2d, patch_size_anchor, resampling_factor, padding_pixels_resampled, mask
     
@@ -441,12 +443,14 @@ class NuScenesBase(MMDetNuScenesDataset):
             shifted_patch_center = [np.clip(int(shifted_patch_center[0]), 0, NUSC_IMG_WIDTH-1), np.clip(int(shifted_patch_center[1]), 0, NUSC_IMG_HEIGHT-1)]
             cam_instance.center_2d = shifted_patch_center
             cam_instance.patch_center_2d = shifted_patch_center
+        else:
+            cam_instance.patch_center_2d = cam_instance.center_2d
         
         # Crop patch from origibal image
         patch, patch_center_2d, patch_size_original, resampling_factor, padding_pixels_resampled, mask_2d_bbox = self._get_instance_patch(img_path, cam_instance)
         
-        # if patch is None or patch_size_original is None:
-        #     return None
+        if patch is None or patch_size_original is None:
+            return None
         
         # Compute fill factor in pixels
         fill_factor = padding_pixels_resampled / self.patch_size_return[0]
@@ -566,6 +570,15 @@ class NuScenesBase(MMDetNuScenesDataset):
 
         return ret
     
+    def __get_new_item__(self, idx):
+        # iter next sample if no instances present
+        # prevent querying idx outside of bounds
+        if idx + 1 >= self.__len__():
+            return self.__getitem__(0)
+        else:
+            return self.__getitem__(idx + 1)
+        
+    
     def __getitem__(self, idx):
         ret = edict()
         
@@ -609,12 +622,9 @@ class NuScenesBase(MMDetNuScenesDataset):
         if np.random.rand() <= (1. - self.negative_sample_prob):
             # Get a random crop of an instance with at least 50% overlap
             if len(cam_instances) == 0:
-                # iter next sample if no instances present
-                # prevent querying idx outside of bounds
-                if idx + 1 >= self.__len__():
-                    return self.__getitem__(0)
-                else:
-                    return self.__getitem__(idx + 1)
+
+                return self.__get_new_item__(idx)
+            
             # Choose one random object from all objects in the image
             random_idx = np.random.randint(0, len(cam_instances))
             cam_instance = cam_instances[random_idx]
@@ -624,6 +634,8 @@ class NuScenesBase(MMDetNuScenesDataset):
                                           img_path=os.path.join(self.img_root, cam_name, img_file),
                                           cam2img=sample_img_info.cam2img,
                                           postfix="")
+            if patch_obj is None:
+                return self.__get_new_item__(idx)
             ret.bbox_3d_gt = patch_obj.bbox_3d
             ret.update(patch_obj)
             # get a second crop of the same object instance again
@@ -642,10 +654,7 @@ class NuScenesBase(MMDetNuScenesDataset):
             #     ret.bbox_3d_gt_2 = patch_obj.bbox_3d
                 
             if patch_obj is None or patch_obj_2 is None:
-                if idx + 1 >= self.__len__():
-                    return self.__getitem__(0)
-                else:
-                    return self.__getitem__(idx + 1)
+                return self.__get_new_item__(idx)
 
             # patch_size_original = patch_obj.patch_size
             patch_center_2d = torch.tensor(patch_obj.center_2d).float()
@@ -666,10 +675,7 @@ class NuScenesBase(MMDetNuScenesDataset):
             
             background_patch, center_2d = self.get_random_crop_without_overlap(img_pil, bbox_2d_list, PATCH_ANCHOR_SIZES)
             if background_patch is None:
-                if idx + 1 >= self.__len__():
-                    return self.__getitem__(0)
-                else:
-                    return self.__getitem__(idx + 1)
+                return self.__get_new_item__(idx)
 
             ret.class_id = self.label_id2class_id[LABEL_NAME2ID['background']]
 
@@ -692,10 +698,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
             background_patch_dict = self.get_background_patch(background_patch)
             if background_patch_dict is None:
-                if idx + 1 >= self.__len__():
-                    return self.__getitem__(0)
-                else:
-                    return self.__getitem__(idx + 1)
+                return self.__get_new_item__(idx)
 
             ret.update(background_patch_dict)
             ret.update({k + "_2": v for k, v in background_patch_dict.items()})

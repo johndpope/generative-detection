@@ -73,6 +73,8 @@ class PoseAutoencoder(AutoencoderKL):
                  apply_convolutional_shift_img_space=False,
                  apply_convolutional_shift_latent_space=False,
                  quantconfig=None,
+                 quantize_obj=False,
+                 quantize_pose=False,
                  **kwargs
                  ):
         pl.LightningModule.__init__(self)
@@ -85,24 +87,25 @@ class PoseAutoencoder(AutoencoderKL):
         self.bbox_key = bbox_key
         self.fill_factor_key = fill_factor_key
         self.image_mask_key = image_mask_key
+        self.train_on_yaw = train_on_yaw
         
-        self.perturb_rad_warmup_steps = perturb_rad_warmup_steps
-        
-        # Run with dropout
-        self.dropout_prob_final = dropout_prob_final # 0.7
-        self.dropout_prob_init = dropout_prob_init # 1.0
-        self.dropout_prob = self.dropout_prob_init
-        self.dropout_warmup_steps = dropout_warmup_steps # 10000 (after stage 1: encoder pretraining)
-        self.pose_conditioned_generation_steps = pose_conditioned_generation_steps # 10000
-        
-        assert ddconfig["double_z"]
-        
-        # Encoder setup
-        self.encoder_pretrain_steps = lossconfig["params"]["encoder_pretrain_steps"]
-        self.intermediate_img_feature_leak_steps = intermediate_img_feature_leak_steps
-        self.train_on_yaw = train_on_yaw # Alternative is 3 angles
+        # Encoder Setup
         self.encoder = FeatEncoder(**ddconfig)
-        self.quant_conv_obj = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
+        self.obj_quantization = quantize_obj
+        self.pose_quantization = quantize_pose
+        
+        if quantize_obj:
+            assert quantconfig is not None, "quantconfig is not defined but quantize_obj is set to True."
+            self.quantize_obj = instantiate_from_config(quantconfig)
+        
+        if quantize_pose:
+            assert quantconfig is not None, "quantconfig is not defined but quantize_pose is set to True."
+            self.quantize_pose = instantiate_from_config(quantconfig)
+        
+        quant_conv_obj_embed_dim = embed_dim if hasattr(self, "quantize_obj") else 2*embed_dim
+
+        assert ddconfig["double_z"]
+        self.quant_conv_obj = torch.nn.Conv2d(2*ddconfig["z_channels"], quant_conv_obj_embed_dim, 1)
         self.quant_conv_pose = torch.nn.Conv2d(2*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         if quantconfig is not None:
@@ -110,6 +113,8 @@ class PoseAutoencoder(AutoencoderKL):
             self.quantize = instantiate_from_config(quantconfig)
         else:
             self.quantization = False
+            
+        self.encoder_pretrain_steps = lossconfig["params"]["encoder_pretrain_steps"]
         
         # Object latent
         self.add_noise_to_z_obj = add_noise_to_z_obj
@@ -123,12 +128,21 @@ class PoseAutoencoder(AutoencoderKL):
         self.pose_encoder = instantiate_from_config(pose_encoder_config)
         
         # Decoder Setup
-        assert apply_convolutional_shift_img_space != apply_convolutional_shift_latent_space, "Only one of the shift types (image or latent space) can be applied"
+        assert ~(apply_convolutional_shift_img_space and apply_convolutional_shift_latent_space), "Only one of the shift types (image or latent space) can be applied"
         self.apply_conv_shift_img_space = apply_convolutional_shift_img_space
         self.apply_conv_shift_latent_space = apply_convolutional_shift_latent_space
         self.decoder = FeatDecoder(**ddconfig)
+        
+        # Dropout Setup
+        self.dropout_prob_final = dropout_prob_final # 0.7
+        self.dropout_prob_init = dropout_prob_init # 1.0
+        self.dropout_prob = self.dropout_prob_init
+        self.dropout_warmup_steps = dropout_warmup_steps # 10000 (after stage 1: encoder pretraining)
+        self.pose_conditioned_generation_steps = pose_conditioned_generation_steps # 10000
+        self.intermediate_img_feature_leak_steps = intermediate_img_feature_leak_steps
 
         # Loss setup
+        lossconfig["params"]["pose_conditioned_generation_steps"] = pose_conditioned_generation_steps
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
         self.loss = instantiate_from_config(lossconfig)
         self.num_classes = lossconfig["params"]["num_classes"]
@@ -138,6 +152,8 @@ class PoseAutoencoder(AutoencoderKL):
             self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
         if monitor is not None:
             self.monitor = monitor
+            
+        self.perturb_rad_warmup_steps = perturb_rad_warmup_steps
         
         # Checkpointing
         self.use_ema = ema_decay is not None
@@ -208,7 +224,7 @@ class PoseAutoencoder(AutoencoderKL):
         bbox_posterior = DiagonalGaussianDistribution(bbox_moments)
         return bbox_posterior, c_pred
     
-    def _decode_pose(self, x, sample_posterior=True):
+    def decode_pose(self, x, sample_posterior=True):
         """
         Decode the pose from the given image feature map.
         
@@ -224,7 +240,7 @@ class PoseAutoencoder(AutoencoderKL):
         
         bbox_posterior, c_pred = self._decode_pose_to_distribution(z)
         
-        if sample_posterior:
+        if sample_posterior and not self.pose_quantization:
             bbox_pred = bbox_posterior.sample()
         else:
             bbox_pred = bbox_posterior.mode()
@@ -233,7 +249,7 @@ class PoseAutoencoder(AutoencoderKL):
         dec_pose = torch.cat([bbox_pred, c], dim=-1) # torch.Size([8, 19])
         return dec_pose, bbox_posterior
     
-    def _encode_pose(self, x):
+    def encode_pose(self, x):
         """
         Encode the pose to get the pose feature map from the given pose tensor.
         
@@ -250,14 +266,25 @@ class PoseAutoencoder(AutoencoderKL):
     def encode(self, x):
         x = x.to(self.device) # torch.Size([3, 3, 256, 256])
         h = self.encoder(x) # torch.Size([3, 32, 16, 16])
-        moments_obj = self.quant_conv_obj(h) # torch.Size([3, 8, 16, 16])
-        pose_feat = self.quant_conv_pose(h) # torch.Size([3, 4, 16, 16])
-
-        if self.quantization:
-            posterior_obj, emb_loss_obj, info_obj = self.quantize(moments_obj) # torch.Size([3, 8, 16, 16])
+        moments_obj = self.quant_conv_obj(h) # torch.Size([3, 32, 16, 16])
+        pose_feat = self.quant_conv_pose(h) # torch.Size([3, 16, 16, 16])
+        
+        q_loss = torch.tensor([0.0]).to(self.device)
+        info_obj = (None, None, None)
+        info_pose = (None, None, None)
+        if self.obj_quantization:
+            posterior_obj, q_loss_obj, info_obj = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
+            q_loss += q_loss_obj
         else:
             posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
-        return posterior_obj, pose_feat
+        
+        if self.pose_quantization:
+            pose_feat, q_loss_pose, info_pose = self.quantize_pose(pose_feat) # torch.Size([3, 8, 16, 16])
+            q_loss += q_loss_pose
+        else:
+            pose_feat = pose_feat
+
+        return posterior_obj, pose_feat, q_loss, info_obj, info_pose
     
     def _get_dropout_prob(self):
         """
@@ -345,7 +372,7 @@ class PoseAutoencoder(AutoencoderKL):
 
         return shifted_images
 
-    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None):
+    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, return_pred_indices=False):
         """
         Forward pass of the autoencoder model.
         
@@ -354,76 +381,83 @@ class PoseAutoencoder(AutoencoderKL):
             sample_posterior (bool, optional): Whether to sample from the posterior distribution or use the mode.
         
         Returns:
-            dec_obj (Tensor): Decoded object tensor.
+            pred_objdec_obj (Tensor): Decoded object tensor.
             dec_pose (Tensor): Decoded pose tensor.
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        apply_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
+        apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float() # torch.Size([4, 3, 256, 256])
         # Encode Image
-        posterior_obj, pose_feat = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
+        posterior_obj, pose_feat, q_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
         
-        # Sample from posterior distribution or use mode
-        if sample_posterior: # True
-            z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
+        if self.obj_quantization:
+            z_obj = posterior_obj
         else:
-            z_obj = posterior_obj.mode()
+            # Sample from posterior distribution or use mode
+            if sample_posterior: # True
+                z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
+            else:
+                z_obj = posterior_obj.mode()
+                
+        # Extract pose information from pose features
+        pred_pose, bbox_posterior = self.decode_pose(pose_feat, sample_posterior=sample_posterior if not self.obj_quantization else False) # torch.Size([4, 8]), torch.Size([4, 7])
         
         # Dropout object feature latents
         self.dropout_prob = self._get_dropout_prob()
         if self.dropout_prob > 0:
             dropout = nn.Dropout(p=self.dropout_prob)
             z_obj = dropout(z_obj)
+            
+        if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
+            pred_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
         
         # Add gaussian noise to object feature latents
-        if self.add_noise_to_z_obj:
-            # draw from standard normal distribution
-            std_normal = Normal(0, 1)
-            z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
-            z_obj = z_obj + z_obj_noise
-        
-        # inputs: torch.Size([4, 16, 16, 16]), True
-        # Extract pose information from posterior distribution
-        dec_pose, bbox_posterior = self._decode_pose(pose_feat, sample_posterior) # torch.Size([4, 8]), torch.Size([4, 7])
-        
-        
-        if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
-            dec_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
-        elif apply_shift:
+        # if self.add_noise_to_z_obj:
+        #     # draw from standard normal distribution
+        #     std_normal = Normal(0, 1)
+        #     z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
+        #     z_obj = z_obj + z_obj_noise
+            
+        if not apply_manual_shift:
+             # Replace pose with other pose if supervised with other patch
+            if second_pose is not None:
+                gen_pose = second_pose.to(pred_pose)
+            else:
+                gen_pose = pred_pose
+            
+            # Run pose encoder layers  
+            z_pose = self.encode_pose(gen_pose) # torch.Size([4, 16, 16, 16])
+
+            assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
+            
+            # Add object and pose latents
+            z_obj_pose = z_obj + z_pose # torch.Size([4, 16, 16, 16])
+        else:
+            z_obj_pose = z_obj
             # Compute shift if shift between both patches
             if second_pose is not None:
                 shift_x = second_pose[:, 0] - pose_gt[:, 0]
                 shift_y = second_pose[:, 1] - pose_gt[:, 1]
-            else:
-                shift_x = torch.zeros_like(pose_gt[:, 0])
-                shift_y = torch.zeros_like(pose_gt[:, 0])
                 
-            z_obj_pose = z_obj
-            
-            if self.apply_conv_shift_latent_space:
-                z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)
-            
-            dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
-            
-            if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space:
-                dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
-        else:
-             # Replace pose with other pose if supervised with other patch
-            if second_pose is not None:
-                gen_pose = second_pose.to(dec_pose)
             else:
-                gen_pose = dec_pose
-                
-            enc_pose = self._encode_pose(gen_pose) # torch.Size([4, 16, 16, 16])
+                shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
         
-            assert z_obj.shape == enc_pose.shape, f"z_obj shape: {z_obj.shape}, enc_pose shape: {enc_pose.shape}"
+        # Apply shift in latent space
+        if self.apply_conv_shift_latent_space:
+            z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
         
-            z_obj_pose = z_obj + enc_pose # torch.Size([4, 16, 16, 16])
-            dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
-            
-        return dec_obj, dec_pose, posterior_obj, bbox_posterior
+        # Predict images from object and pose latents
+        pred_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
+        
+        # Apply shift in image space
+        if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space:
+            pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
+
+        if return_pred_indices:
+            return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
+        return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss
 
     def get_pose_input(self, batch, k, postfix=""):
         x = batch[k+postfix] 
@@ -527,7 +561,7 @@ class PoseAutoencoder(AutoencoderKL):
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt, second_pose=second_pose)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True)
         
         self.log("dropout_prob", self.dropout_prob, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.iter_counter += 1
@@ -535,10 +569,12 @@ class PoseAutoencoder(AutoencoderKL):
         if optimizer_idx == 0:
             # train encoder+decoder+logvar # last layer: torch.Size([3, 128, 3, 3])
             aeloss, log_dict_ae = self.loss(rgb_gt, segm_mask_gt, pose_gt,
-                                            dec_obj, dec_pose,
+                                            pred_obj, dec_pose,
                                             class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                                             posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
-                                            last_layer=self.get_last_layer(), split="train")            
+                                            last_layer=self.get_last_layer(), split="train",
+                                            q_loss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
+                                                    
             self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
@@ -550,10 +586,10 @@ class PoseAutoencoder(AutoencoderKL):
         if optimizer_idx == 1:
             # train the discriminator
             discloss, log_dict_disc = self.loss(rgb_gt, segm_mask_gt, pose_gt,
-                                                dec_obj, dec_pose,
+                                                pred_obj, dec_pose,
                                                 class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                                                 posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
-                                                last_layer=self.get_last_layer(), split="train")
+                                                last_layer=self.get_last_layer(), split="train", q_loss=q_loss)
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             
@@ -569,21 +605,23 @@ class PoseAutoencoder(AutoencoderKL):
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt, second_pose=second_pose)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True)
         
         _, log_dict_ae = self.loss(rgb_gt, segm_mask_gt, pose_gt,
-                                      dec_obj, dec_pose,
+                                      pred_obj, dec_pose,
                                       class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                       posterior_obj, bbox_posterior, 0, 
                                       global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
-                                      last_layer=self.get_last_layer(), split="val")
+                                      last_layer=self.get_last_layer(), split="val",
+                                      q_loss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
 
         _, log_dict_disc = self.loss(rgb_gt, segm_mask_gt, pose_gt,
-                                        dec_obj, dec_pose,
+                                        pred_obj, dec_pose,
                                         class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                         posterior_obj, bbox_posterior, 1, 
                                         global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
-                                        last_layer=self.get_last_layer(), split="val")
+                                        last_layer=self.get_last_layer(), split="val", 
+                                        q_loss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
 
         self.log("val/rec_loss", log_dict_ae["val/rec_loss"], sync_dist=True)
         del log_dict_ae["val/rec_loss"]
@@ -641,9 +679,9 @@ class PoseAutoencoder(AutoencoderKL):
     def _get_valid_patches(self, input_patches, global_patch_index):
         local_patch_idx = torch.arange(len(global_patch_index))
         # Run encoder
-        posterior_obj, pose_feat = self.encode(input_patches)
+        posterior_obj, pose_feat, q_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_patches)
         z_obj = posterior_obj.mode()
-        dec_pose, bbox_posterior  = self._decode_pose(pose_feat, sample_posterior=False)
+        dec_pose, bbox_posterior  = self.decode_pose(pose_feat, sample_posterior=False)
         
         # Threshold by class probabilities
         # TODO: Check class probabilities after sofmax
@@ -696,7 +734,7 @@ class PoseAutoencoder(AutoencoderKL):
         for k in range(self.num_refinement_steps):
             dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
             optim_refined.zero_grad()
-            enc_pose = self._encode_pose(dec_pose)
+            enc_pose = self.encode_pose(dec_pose)
             z_obj_pose = z_obj + enc_pose
             gen_image = self.decode(z_obj_pose)
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
@@ -720,9 +758,12 @@ class PoseAutoencoder(AutoencoderKL):
                                   list(self.post_quant_conv.parameters())+ \
                                   list(self.pose_encoder.parameters())+ \
                                   list(self.pose_decoder.parameters())
-        if hasattr(self, 'quantize'):
-            opt_ae_params = opt_ae_params + list(self.quantize.parameters())
+        if hasattr(self, 'quantize_obj'):
+            opt_ae_params = opt_ae_params + list(self.quantize_obj.parameters())
         
+        if hasattr(self, 'quantize_pose'):
+            opt_ae_params = opt_ae_params + list(self.quantize_pose.parameters())
+
         opt_ae = torch.optim.Adam(opt_ae_params,
                                   lr=lr, betas=(0.5, 0.9))
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
@@ -742,7 +783,7 @@ class PoseAutoencoder(AutoencoderKL):
         else:
             z_obj = posterior_obj.mode()
         dec_pose_perturbed = self._perturb_poses(batch, dec_pose) # torch.Size([4, 8])
-        enc_pose_perturbed = self._encode_pose(dec_pose_perturbed) # torch.Size([4, 16, 16, 16])
+        enc_pose_perturbed = self.encode_pose(dec_pose_perturbed) # torch.Size([4, 16, 16, 16])
         z_obj_pose_perturbed = z_obj + enc_pose_perturbed # torch.Size([4, 16, 16, 16])
         dec_obj_pose_perturbed = self.decode(z_obj_pose_perturbed) # torch.Size([4, 3, 256, 256])
         return dec_obj_pose_perturbed
@@ -751,8 +792,8 @@ class PoseAutoencoder(AutoencoderKL):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
 
-        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, pose_gt, second_pose=second_pose)
-        xrec, poserec, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt)
+        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss = self.forward(rgb_in, pose_gt, second_pose=second_pose)
+        xrec, poserec, posterior_obj, bbox_posterior, q_loss = self.forward(rgb_in, pose_gt)
         
         xrec_rgb = xrec[:, :3, :, :] # torch.Size([8, 3, 64, 64])
         xrec_rgb_2 = xrec_2[:, :3, :, :] # torch.Size([8, 3, 64, 64])
@@ -798,7 +839,7 @@ class PoseAutoencoder(AutoencoderKL):
         for idx, snd_pose in enumerate(second_pose):
             # torch.Size([1, 4])
             snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
-            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2 = self.forward(rgb_in, pose_gt, second_pose=snd_pose)
+            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss = self.forward(rgb_in, pose_gt, second_pose=snd_pose)
             xrec_rgb_2 = xrec_2[:, :3, :, :]    
 
             if rgb_in_viz.shape[1] > 3:

@@ -20,7 +20,7 @@ class LPIPSWithDiscriminator(LPIPSWithDiscriminator_LDM):
 class PoseLoss(LPIPSWithDiscriminator_LDM):
     """LPIPS loss with discriminator."""
     def __init__(self, train_on_yaw=True, kl_weight_obj=1e-5, kl_weight_bbox=1e-2, 
-                 pose_weight=1.0, mask_weight=0.0, class_weight=1.0, bbox_weight=1.0,
+                 codebook_weight=1.0, pose_weight=1.0, mask_weight=0.0, class_weight=1.0, bbox_weight=1.0,
                  fill_factor_weight=1.0,
                  pose_loss_fn=None, mask_loss_fn=None, encoder_pretrain_steps=0, pose_conditioned_generation_steps=7000,
                  leak_img_info_steps=0,
@@ -28,6 +28,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
                  num_classes=11, dataset_stats_path="dataset_stats/combined/all.pkl", 
                 *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.codebook_weight = codebook_weight
         self.pose_conditioned_generation_steps = pose_conditioned_generation_steps
         self.encoder_pretrain_steps=encoder_pretrain_steps
         self.pose_weight = pose_weight
@@ -35,7 +36,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         self.fill_factor_weight = fill_factor_weight
         self.class_weight = class_weight
         self.bbox_weight = bbox_weight
-        self.use_mask_loss = use_mask_loss
+        self.use_segm_mask_loss = use_mask_loss
         self.num_classes = num_classes
         self.kl_weight_obj = kl_weight_obj
         self.kl_weight_bbox = kl_weight_bbox
@@ -127,16 +128,18 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         
         return pose_loss, weighted_pose_loss, t1_loss, t2_loss, t3_loss, v3_loss
 
-    def _get_rec_loss(self, inputs, reconstructions, use_pixel_loss):
+    def _get_rec_loss(self, rgb_inputs, rgb_reconstructions, use_pixel_loss, mask_2d_bbox=None):
         # MSE RGB
         if use_pixel_loss:
-            rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous()) # torch.Size([4, 3, 256, 256])
+            # Compute pixelwise reconstruction only inside 2d bbox
+            rec_loss = (rgb_inputs.contiguous() - rgb_reconstructions.contiguous())* mask_2d_bbox # torch.Size([4, 3, 256, 256])
+            rec_loss = torch.abs(rec_loss)
         else:
-            rec_loss = torch.zeros_like(inputs.contiguous())
+            rec_loss = torch.zeros_like(rgb_inputs.contiguous())
             
         # Perceptual loss
         if self.perceptual_weight > 0:
-            p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous()) # torch.Size([4, 1, 1, 1])
+            p_loss = self.perceptual_loss(rgb_inputs.contiguous(), rgb_reconstructions.contiguous()) # torch.Size([4, 1, 1, 1])
             if torch.sum(p_loss) > 100:
                 p_loss = 0.0
             rec_loss = rec_loss + self.perceptual_weight * p_loss # torch.Size([4, 3, 256, 256])
@@ -162,7 +165,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         return kl_loss
     
     def get_mask_loss(self, mask1, mask2, mask_bg):
-        if self.use_mask_loss:
+        if self.use_segm_mask_loss:
             mask_loss = self.mask_loss(mask1, mask2)
             mask_loss_masked = mask_loss * mask_bg.unsqueeze(1).unsqueeze(1).unsqueeze(1)
             weighted_mask_loss = self.mask_weight * mask_loss
@@ -211,70 +214,75 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
     
     def forward(self, 
                 rgb_gt, segm_mask_gt, pose_gt,
-                dec_obj, dec_pose,
+                rgb_pred, pose_pred,
                 class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                 posterior_obj, bbox_posterior, optimizer_idx, global_step, mask_2d_bbox,
                 last_layer=None, cond=None, split="train",
-                weights=None):
-        mask_2d_bbox = mask_2d_bbox.to(rgb_gt.device)
-        use_pixel_loss = True
-        if global_step <= (self.leak_img_info_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps):
-            use_pixel_loss = False
+                weights=None, q_loss=torch.tensor([0.0]), predicted_indices_obj=None, predicted_indices_pose=None):
         
+        q_loss = q_loss.to(rgb_gt.device)
+        
+        # first POSE_DIM in pose_rec are the 6D pose, next 3 are the LHW and rest is class probs
+        pose_rec = pose_pred[:, :POSE_DIM] # torch.Size([4, 4])
+        lhw_rec = pose_pred[:, POSE_DIM:POSE_DIM+LHW_DIM] # torch.Size([4, 3])
+        fill_factor_rec = pose_pred[:, POSE_DIM+LHW_DIM:POSE_DIM+LHW_DIM+FILL_FACTOR_DIM] # 4, 1
+        class_probs = pose_pred[:, POSE_DIM+LHW_DIM+FILL_FACTOR_DIM:] # torch.Size([4, 1])
+        # GT class and negative background sample one hot encoding
         class_gt = class_gt.to(rgb_gt.device)
         mask_bg = torch.zeros_like(class_gt, device=rgb_gt.device)
         mask_bg[class_gt != BACKGROUND_CLASS_IDX] = 1
         
+        # RGB only reconstruction
+        rgb_reconstructions = rgb_pred[:, :3, :, :] # torch.Size([4, 3, 256, 256])
+        
+        # Add segmentation mask mask
         if segm_mask_gt == None: # True
             segm_mask_gt = torch.zeros_like(rgb_gt[:, :1, :, :]) # torch.Size([4, 1, 256, 256])
-            self.use_mask_loss = False
+            self.use_segm_mask_loss = False
             gt_obj = rgb_gt # torch.Size([4, 3, 256, 256])
         else:
             gt_obj = torch.cat((rgb_gt, segm_mask_gt), dim=1)
-        inputs, reconstructions = gt_obj, dec_obj # torch.Size([4, 3, 256, 256]), torch.Size([4, 3, 256, 256])
+        disc_inputs, reconstructions = gt_obj.clone(), rgb_pred # torch.Size([4, 3, 256, 256]), torch.Size([4, 3, 256, 256])
         
-        inputs_rgb = rgb_gt # torch.Size([4, 3, 256, 256])
-        inputs_segm_mask = segm_mask_gt # torch.Size([4, 1, 256, 256])
-        
-        reconstructions_rgb = reconstructions[:, :3, :, :] # torch.Size([4, 3, 256, 256])
-        
+        # 2D BBOX mask to focus mse loss on objects only
+        mask_2d_bbox = mask_2d_bbox.to(rgb_gt.device)
+        use_pixel_loss = True
+        if global_step <= (self.leak_img_info_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps):
+            use_pixel_loss = False
+
         # if reconstructions have alpha channel, store it in mask
         if reconstructions.shape[1] == 4:
             reconstructions_mask = reconstructions[:, 3:, :, :]
         else:
-            reconstructions_mask = torch.zeros_like(inputs_segm_mask) # torch.Size([4, 1, 256, 256])
-            self.use_mask_loss = False
+            reconstructions_mask = torch.zeros_like(segm_mask_gt) # torch.Size([4, 1, 256, 256])
+            self.use_segm_mask_loss = False
         
-        # apply mask_2d_bbox to input and reconstructions
-        if mask_2d_bbox is not None:
-            inputs = inputs * mask_2d_bbox
-            reconstructions = reconstructions * mask_2d_bbox
-            inputs_rgb = inputs_rgb * mask_2d_bbox
-            reconstructions_rgb = reconstructions_rgb * mask_2d_bbox
-            inputs_segm_mask = inputs_segm_mask * mask_2d_bbox
-            reconstructions_mask = reconstructions_mask * mask_2d_bbox
-        
-        # first POSE_DIM in pose_rec are the 6D pose, next 3 are the LHW and rest is class probs
-        pose_rec = dec_pose[:, :POSE_DIM] # torch.Size([4, 4])
-       
-        lhw_rec = dec_pose[:, POSE_DIM:POSE_DIM+LHW_DIM] # torch.Size([4, 3])
-        fill_factor_rec = dec_pose[:, POSE_DIM+LHW_DIM:POSE_DIM+LHW_DIM+FILL_FACTOR_DIM] # 4, 1
-        class_probs = dec_pose[:, POSE_DIM+LHW_DIM+FILL_FACTOR_DIM:] # torch.Size([4, 1])
-            
+        # Compute BBOX and Class loss
         class_loss, weighted_class_loss = self.compute_class_loss(class_gt, class_probs)
         bbox_loss, weighted_bbox_loss = self.compute_bbox_loss(bbox_gt, lhw_rec, mask_bg)
-        
+        # Compute Pose loss
         pose_loss, weighted_pose_loss, t1_loss, t2_loss, t3_loss, v3_loss = self.compute_pose_loss(pose_gt, pose_rec, mask_bg)
-        mask_loss, weighted_mask_loss = self.get_mask_loss(inputs_segm_mask, reconstructions_mask, mask_bg)
+        # Compute fill factor loss
         fill_factor_loss, weighted_fill_factor_loss = self.compute_fill_factor_loss(fill_factor_gt, fill_factor_rec.squeeze(), mask_bg)
         
-        rec_loss = self._get_rec_loss(inputs_rgb, reconstructions_rgb, use_pixel_loss)
+        # Compute segmentation loss
+        mask_loss, weighted_mask_loss = self.get_mask_loss(segm_mask_gt, reconstructions_mask, mask_bg)
+        # Compute reconstruction loss
+        rec_loss = self._get_rec_loss(rgb_gt, rgb_reconstructions, use_pixel_loss, mask_2d_bbox)
         nll_loss, weighted_nll_loss = self._get_nll_loss(rec_loss, mask_bg, weights)
         
-        kl_loss_obj = self._get_kl_loss(posterior_obj, mask_bg)
+        # Compute KL loss for VAE
+        # check if posterior_obj is a DiagonalGaussianDistrubution
+        if isinstance(posterior_obj, DiagonalGaussianDistribution):
+            kl_loss_obj = self._get_kl_loss(posterior_obj, mask_bg)
+        else:
+            kl_loss_obj = torch.tensor(0.0).to(rgb_gt.device)
         
-        kl_loss_obj_bbox = self.compute_pose_kl_loss(bbox_posterior, mask_bg, class_gt_label)
-    
+        if isinstance(bbox_posterior, DiagonalGaussianDistribution):
+            kl_loss_obj_bbox = self.compute_pose_kl_loss(bbox_posterior, mask_bg, class_gt_label)
+        else:
+            kl_loss_obj_bbox = torch.tensor(0.0).to(rgb_gt.device)
+        
         # now the GAN part
         if optimizer_idx == 0:
             # generator update
@@ -301,25 +309,25 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             disc_factor = adopt_weight(self.disc_factor, global_step, 
                                        threshold=self.discriminator_iter_start)
             
-            
             if self.encoder_pretrain_steps == -1:
                 # train only pose loss
                 loss = weighted_pose_loss \
                     + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
-                    + (self.kl_weight_bbox * kl_loss_obj_bbox)
+                    + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * q_loss.mean())
             else:
                 if global_step >= self.encoder_pretrain_steps: # train rec loss only after encoder_pretrain_steps
                     loss = weighted_pose_loss + weighted_mask_loss + weighted_nll_loss \
                         + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
                     + (self.kl_weight_obj * kl_loss_obj) + (self.kl_weight_bbox * kl_loss_obj_bbox) \
-                        + d_weight * disc_factor * g_loss
+                        + d_weight * disc_factor * g_loss + (self.codebook_weight * q_loss.mean())
                 else: # train only pose loss before encoder_pretrain_steps
                     loss = weighted_pose_loss \
                         + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
-                        + (self.kl_weight_bbox * kl_loss_obj_bbox)
+                        + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * q_loss.mean())
                 
             log =  {"{}/total_loss".format(split): loss.clone().detach().mean(), 
                     "{}/logvar".format(split): self.logvar.detach(),
+                    "{}/quant_loss".format(split): q_loss.detach().mean(),
                     "{}/kl_loss_obj".format(split): kl_loss_obj.detach().mean(), 
                     "{}/nll_loss".format(split): nll_loss.detach().mean(),
                     "{}/weighted_nll_loss".format(split): weighted_nll_loss.detach().mean(),
@@ -345,16 +353,17 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
                     "{}/fill_factor_loss".format(split): fill_factor_loss.detach().mean(),
                     "{}/weighted_fill_factor_loss".format(split): weighted_fill_factor_loss.detach().mean(),
                    }
+            
             return loss, log
 
         if optimizer_idx == 1:
             # second pass for discriminator update
             if cond is None:
-                logits_real = self.discriminator(inputs.contiguous().detach())
+                logits_real = self.discriminator(disc_inputs.contiguous().detach())
                 logits_fake = self.discriminator(reconstructions.contiguous().detach())
             else:
                 logits_real = self.discriminator(
-                    torch.cat((inputs.contiguous().detach(), cond), dim=1))
+                    torch.cat((disc_inputs.contiguous().detach(), cond), dim=1))
                 logits_fake = self.discriminator(
                     torch.cat((reconstructions.contiguous().detach(), cond), dim=1))
 
