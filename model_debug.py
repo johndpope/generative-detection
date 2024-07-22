@@ -493,10 +493,12 @@ def main():
     def run_one_iteration(model, data):
         dataloader = data.train_dataloader()
         opts, _ = model.configure_optimizers()
-        for batch in tqdm.tqdm(dataloader):
+        pbar = tqdm.tqdm(dataloader)
+        for batch in pbar:
             model.train()
             loss = model.training_step(batch, 0, optimizer_idx=0)
             
+            pbar.set_description(f"Loss: {loss.detach().cpu().numpy():.2f}")
             for opt in opts:
                 opt.zero_grad()
             loss.backward()

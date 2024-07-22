@@ -144,6 +144,8 @@ class PoseAutoencoder(AutoencoderKL):
         # Loss setup
         lossconfig["params"]["pose_conditioned_generation_steps"] = pose_conditioned_generation_steps
         lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
+        if not quantize_obj and not quantize_pose:
+            lossconfig["params"]["codebook_weight"] = 0.0
         self.loss = instantiate_from_config(lossconfig)
         self.num_classes = lossconfig["params"]["num_classes"]
         
@@ -264,25 +266,23 @@ class PoseAutoencoder(AutoencoderKL):
         return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.feat_dims[0], self.feat_dims[1], self.feat_dims[2])
     
     def encode(self, x):
-        x = x.to(self.device) # torch.Size([3, 3, 256, 256])
-        h = self.encoder(x) # torch.Size([3, 32, 16, 16])
-        moments_obj = self.quant_conv_obj(h) # torch.Size([3, 32, 16, 16])
-        pose_feat = self.quant_conv_pose(h) # torch.Size([3, 16, 16, 16])
+        x = x.to(self.device) # torch.Size([B, 3, 256, 256])
+        h = self.encoder(x) # torch.Size([B, 32, 16, 16])
+        moments_obj = self.quant_conv_obj(h) # torch.Size([B, 32, 16, 16])
+        pose_feat = self.quant_conv_pose(h) # torch.Size([B, 16, 16, 16])
         
         q_loss = torch.tensor([0.0]).to(self.device)
         info_obj = (None, None, None)
         info_pose = (None, None, None)
         if self.obj_quantization:
-            posterior_obj, q_loss_obj, info_obj = self.quantize_obj(moments_obj) # torch.Size([3, 8, 16, 16])
+            posterior_obj, q_loss_obj, info_obj = self.quantize_obj(moments_obj) # torch.Size([B, 8, 16, 16])
             q_loss += q_loss_obj
         else:
-            posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
+            posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([B, 16, 16, 16]) sample
         
         if self.pose_quantization:
-            pose_feat, q_loss_pose, info_pose = self.quantize_pose(pose_feat) # torch.Size([3, 8, 16, 16])
+            pose_feat, q_loss_pose, info_pose = self.quantize_pose(pose_feat) # torch.Size([B, 8, 16, 16])
             q_loss += q_loss_pose
-        else:
-            pose_feat = pose_feat
 
         return posterior_obj, pose_feat, q_loss, info_obj, info_pose
     

@@ -309,21 +309,27 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             disc_factor = adopt_weight(self.disc_factor, global_step, 
                                        threshold=self.discriminator_iter_start)
             
-            if self.encoder_pretrain_steps == -1:
-                # train only pose loss
-                loss = weighted_pose_loss \
-                    + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
-                    + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * q_loss.mean())
+            loss = weighted_pose_loss \
+                + weighted_class_loss \
+                + weighted_bbox_loss \
+                + weighted_fill_factor_loss \
+                + (self.codebook_weight * q_loss.mean())
+            
+            if self.encoder_pretrain_steps >= 0:
+                if global_step >= self.encoder_pretrain_steps:
+                    # train rec loss only after encoder_pretrain_steps
+                    loss += weighted_mask_loss + weighted_nll_loss \
+                        + (self.kl_weight_obj * kl_loss_obj) \
+                        + (self.kl_weight_bbox * kl_loss_obj_bbox) \
+                        + d_weight * disc_factor * g_loss
+                else:
+                    # pretrain only pose encoder for encoder_pretrain_steps
+                    loss += (self.kl_weight_bbox * kl_loss_obj_bbox) \
+                        + (self.codebook_weight * q_loss.mean())
             else:
-                if global_step >= self.encoder_pretrain_steps: # train rec loss only after encoder_pretrain_steps
-                    loss = weighted_pose_loss + weighted_mask_loss + weighted_nll_loss \
-                        + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
-                    + (self.kl_weight_obj * kl_loss_obj) + (self.kl_weight_bbox * kl_loss_obj_bbox) \
-                        + d_weight * disc_factor * g_loss + (self.codebook_weight * q_loss.mean())
-                else: # train only pose loss before encoder_pretrain_steps
-                    loss = weighted_pose_loss \
-                        + weighted_class_loss + weighted_bbox_loss + weighted_fill_factor_loss\
-                        + (self.kl_weight_bbox * kl_loss_obj_bbox) + (self.codebook_weight * q_loss.mean())
+                # train only pose loss
+                loss += (self.kl_weight_bbox * kl_loss_obj_bbox) \
+                    + (self.codebook_weight * q_loss.mean())
                 
             log =  {"{}/total_loss".format(split): loss.clone().detach().mean(), 
                     "{}/logvar".format(split): self.logvar.detach(),
