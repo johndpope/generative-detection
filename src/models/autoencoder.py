@@ -58,7 +58,6 @@ class PoseAutoencoder(AutoencoderKL):
                  bbox_key="bbox_sizes",
                  colorize_nlabels=None,
                  monitor=None,
-                 feat_dims=[16, 16, 16],
                  pose_decoder_config=None,
                  pose_encoder_config=None,
                  dropout_prob_init=1.0,
@@ -104,9 +103,14 @@ class PoseAutoencoder(AutoencoderKL):
         
         quant_conv_obj_embed_dim = embed_dim if hasattr(self, "quantize_obj") else 2*embed_dim
 
-        assert ddconfig["double_z"]
-        self.quant_conv_obj = torch.nn.Conv2d(2*ddconfig["z_channels"], quant_conv_obj_embed_dim, 1)
-        self.quant_conv_pose = torch.nn.Conv2d(2*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
+        # assert ddconfig["double_z"]
+        if ddconfig["double_z"]:
+            mult_z = 2
+        else:
+            mult_z = 1
+            
+        self.quant_conv_obj = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], quant_conv_obj_embed_dim, 1)
+        self.quant_conv_pose = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         if quantconfig is not None:
             self.quantization = True
@@ -117,11 +121,15 @@ class PoseAutoencoder(AutoencoderKL):
         self.encoder_pretrain_steps = lossconfig["params"]["encoder_pretrain_steps"]
         
         # Object latent
+        spatial_dim = (np.array([1/k for k in ddconfig["ch_mult"]]).prod()  * 256).astype(int)
         self.add_noise_to_z_obj = add_noise_to_z_obj
-        self.feat_dims = feat_dims
+        self.feat_dims = [embed_dim, spatial_dim, spatial_dim]
         self.embed_dim = embed_dim
         self.z_channels = ddconfig["z_channels"]
         # enc_feat_dims = self._get_enc_feat_dims(ddconfig)
+        
+        pose_encoder_config["params"]["num_channels"] = ddconfig["z_channels"]
+        pose_decoder_config["params"]["num_channels"] = ddconfig["z_channels"]
         
         # Pose prediction and latent
         self.pose_decoder = instantiate_from_config(pose_decoder_config)
@@ -263,7 +271,7 @@ class PoseAutoencoder(AutoencoderKL):
         """
         # x: torch.Size([4, 8])
         flattened_encoded_pose_feat_map = self.pose_encoder(x) # torch.Size([4, 4096]) = 4, 16*16*16     
-        return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.feat_dims[0], self.feat_dims[1], self.feat_dims[2])
+        return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.z_channels, self.feat_dims[1], self.feat_dims[2])
     
     def encode(self, x):
         x = x.to(self.device) # torch.Size([B, 3, 256, 256])

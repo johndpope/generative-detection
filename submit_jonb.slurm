@@ -22,4 +22,4 @@ conda activate $CONDA_ENV
 export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
 
-srun python train.py -b configs/autoencoder/baseline/local_autoencoder_kl_16x16x16.yaml -t --name test --devices 1
+srun python train.py -b configs/autoencoder/baseline/local_autoencoder_vq_16x16x16.yaml -t --name test --devices 1
