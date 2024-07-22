@@ -210,7 +210,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         return fill_factor_loss, weighted_fill_factor_loss
     
     def forward(self, 
-                rgb_gt, mask_gt, pose_gt,
+                rgb_gt, segm_mask_gt, pose_gt,
                 dec_obj, dec_pose,
                 class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                 posterior_obj, bbox_posterior, optimizer_idx, global_step, mask_2d_bbox,
@@ -225,16 +225,16 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         mask_bg = torch.zeros_like(class_gt, device=rgb_gt.device)
         mask_bg[class_gt != BACKGROUND_CLASS_IDX] = 1
         
-        if mask_gt == None: # True
-            mask_gt = torch.zeros_like(rgb_gt[:, :1, :, :]) # torch.Size([4, 1, 256, 256])
+        if segm_mask_gt == None: # True
+            segm_mask_gt = torch.zeros_like(rgb_gt[:, :1, :, :]) # torch.Size([4, 1, 256, 256])
             self.use_mask_loss = False
             gt_obj = rgb_gt # torch.Size([4, 3, 256, 256])
         else:
-            gt_obj = torch.cat((rgb_gt, mask_gt), dim=1)
+            gt_obj = torch.cat((rgb_gt, segm_mask_gt), dim=1)
         inputs, reconstructions = gt_obj, dec_obj # torch.Size([4, 3, 256, 256]), torch.Size([4, 3, 256, 256])
         
         inputs_rgb = rgb_gt # torch.Size([4, 3, 256, 256])
-        inputs_mask = mask_gt # torch.Size([4, 1, 256, 256])
+        inputs_segm_mask = segm_mask_gt # torch.Size([4, 1, 256, 256])
         
         reconstructions_rgb = reconstructions[:, :3, :, :] # torch.Size([4, 3, 256, 256])
         
@@ -242,7 +242,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         if reconstructions.shape[1] == 4:
             reconstructions_mask = reconstructions[:, 3:, :, :]
         else:
-            reconstructions_mask = torch.zeros_like(inputs_mask) # torch.Size([4, 1, 256, 256])
+            reconstructions_mask = torch.zeros_like(inputs_segm_mask) # torch.Size([4, 1, 256, 256])
             self.use_mask_loss = False
         
         # apply mask_2d_bbox to input and reconstructions
@@ -251,7 +251,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             reconstructions = reconstructions * mask_2d_bbox
             inputs_rgb = inputs_rgb * mask_2d_bbox
             reconstructions_rgb = reconstructions_rgb * mask_2d_bbox
-            inputs_mask = inputs_mask * mask_2d_bbox
+            inputs_segm_mask = inputs_segm_mask * mask_2d_bbox
             reconstructions_mask = reconstructions_mask * mask_2d_bbox
         
         # first POSE_DIM in pose_rec are the 6D pose, next 3 are the LHW and rest is class probs
@@ -265,7 +265,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         bbox_loss, weighted_bbox_loss = self.compute_bbox_loss(bbox_gt, lhw_rec, mask_bg)
         
         pose_loss, weighted_pose_loss, t1_loss, t2_loss, t3_loss, v3_loss = self.compute_pose_loss(pose_gt, pose_rec, mask_bg)
-        mask_loss, weighted_mask_loss = self.get_mask_loss(inputs_mask, reconstructions_mask, mask_bg)
+        mask_loss, weighted_mask_loss = self.get_mask_loss(inputs_segm_mask, reconstructions_mask, mask_bg)
         fill_factor_loss, weighted_fill_factor_loss = self.compute_fill_factor_loss(fill_factor_gt, fill_factor_rec.squeeze(), mask_bg)
         
         rec_loss = self._get_rec_loss(inputs_rgb, reconstructions_rgb, use_pixel_loss)

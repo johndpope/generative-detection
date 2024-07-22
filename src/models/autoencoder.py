@@ -47,7 +47,6 @@ class PoseAutoencoder(AutoencoderKL):
                  ddconfig,
                  lossconfig,
                  embed_dim,
-                 euler_convention,
                  ckpt_path=None,
                  ignore_keys=[],
                  image_mask_key=None,
@@ -59,7 +58,6 @@ class PoseAutoencoder(AutoencoderKL):
                  bbox_key="bbox_sizes",
                  colorize_nlabels=None,
                  monitor=None,
-                 activation="relu",
                  feat_dims=[16, 16, 16],
                  pose_decoder_config=None,
                  pose_encoder_config=None,
@@ -69,26 +67,17 @@ class PoseAutoencoder(AutoencoderKL):
                  pose_conditioned_generation_steps=10000,
                  perturb_rad_warmup_steps=100000,
                  intermediate_img_feature_leak_steps=0,
-                 add_noise_to_z_obj=True,
+                 add_noise_to_z_obj=False,
                  train_on_yaw=True,
                  ema_decay=0.999,
                  apply_convolutional_shift_img_space=False,
                  apply_convolutional_shift_latent_space=False,
-                 quantconfig=None
+                 quantconfig=None,
+                 **kwargs
                  ):
         pl.LightningModule.__init__(self)
-        self.apply_convolutional_shift_img_space = apply_convolutional_shift_img_space
-        self.apply_convolutional_shift_latent_space = apply_convolutional_shift_latent_space
-        self.encoder_pretrain_steps = lossconfig["params"]["encoder_pretrain_steps"]
-        self.intermediate_img_feature_leak_steps = intermediate_img_feature_leak_steps
-        self.train_on_yaw = train_on_yaw
-        self.dropout_prob_final = dropout_prob_final # 0.7
-        self.dropout_prob_init = dropout_prob_init # 1.0
-        self.dropout_prob = self.dropout_prob_init
-        self.dropout_warmup_steps = dropout_warmup_steps # 10000 (after stage 1: encoder pretraining)
-        self.pose_conditioned_generation_steps = pose_conditioned_generation_steps # 10000
-        self.add_noise_to_z_obj = add_noise_to_z_obj
-        self.feature_dims = feat_dims
+        
+        # Inputs
         self.image_rgb_key = image_rgb_key
         self.pose_key = pose_key
         self.pose_perturbed_key = pose_perturbed_key
@@ -96,35 +85,61 @@ class PoseAutoencoder(AutoencoderKL):
         self.bbox_key = bbox_key
         self.fill_factor_key = fill_factor_key
         self.image_mask_key = image_mask_key
-        self.encoder = FeatEncoder(**ddconfig)
-        self.decoder = FeatDecoder(**ddconfig)
-
-        if quantconfig is not None:
-            self.quantize = instantiate_from_config(quantconfig)
-
-        lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
-        self.loss = instantiate_from_config(lossconfig)
+        
+        self.perturb_rad_warmup_steps = perturb_rad_warmup_steps
+        
+        # Run with dropout
+        self.dropout_prob_final = dropout_prob_final # 0.7
+        self.dropout_prob_init = dropout_prob_init # 1.0
+        self.dropout_prob = self.dropout_prob_init
+        self.dropout_warmup_steps = dropout_warmup_steps # 10000 (after stage 1: encoder pretraining)
+        self.pose_conditioned_generation_steps = pose_conditioned_generation_steps # 10000
+        
         assert ddconfig["double_z"]
+        
+        # Encoder setup
+        self.encoder_pretrain_steps = lossconfig["params"]["encoder_pretrain_steps"]
+        self.intermediate_img_feature_leak_steps = intermediate_img_feature_leak_steps
+        self.train_on_yaw = train_on_yaw # Alternative is 3 angles
+        self.encoder = FeatEncoder(**ddconfig)
         self.quant_conv_obj = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
         self.quant_conv_pose = torch.nn.Conv2d(2*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        if quantconfig is not None:
+            self.quantization = True
+            self.quantize = instantiate_from_config(quantconfig)
+        else:
+            self.quantization = False
+        
+        # Object latent
+        self.add_noise_to_z_obj = add_noise_to_z_obj
+        self.feat_dims = feat_dims
         self.embed_dim = embed_dim
+        self.z_channels = ddconfig["z_channels"]
+        # enc_feat_dims = self._get_enc_feat_dims(ddconfig)
+        
+        # Pose prediction and latent
+        self.pose_decoder = instantiate_from_config(pose_decoder_config)
+        self.pose_encoder = instantiate_from_config(pose_encoder_config)
+        
+        # Decoder Setup
+        assert apply_convolutional_shift_img_space != apply_convolutional_shift_latent_space, "Only one of the shift types (image or latent space) can be applied"
+        self.apply_conv_shift_img_space = apply_convolutional_shift_img_space
+        self.apply_conv_shift_latent_space = apply_convolutional_shift_latent_space
+        self.decoder = FeatDecoder(**ddconfig)
+
+        # Loss setup
+        lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
+        self.loss = instantiate_from_config(lossconfig)
+        self.num_classes = lossconfig["params"]["num_classes"]
+        
         if colorize_nlabels is not None:
             assert type(colorize_nlabels)==int
             self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
         if monitor is not None:
             self.monitor = monitor
         
-        self.num_classes = lossconfig["params"]["num_classes"]
-        enc_feat_dims = self._get_enc_feat_dims(ddconfig)
-        
-        self.pose_decoder = instantiate_from_config(pose_decoder_config)
-        self.pose_encoder = instantiate_from_config(pose_encoder_config)
-        self.z_channels = ddconfig["z_channels"]
-        self.euler_convention=euler_convention
-        self.feat_dims = feat_dims
-        self.perturb_rad_warmup_steps = perturb_rad_warmup_steps
-        
+        # Checkpointing
         self.use_ema = ema_decay is not None
         if self.use_ema:
             self.ema_decay = ema_decay
@@ -168,7 +183,7 @@ class PoseAutoencoder(AutoencoderKL):
     def _get_enc_feat_dims(self, ddconfig):
         """ pass in dummy input of size from config to get the output size of encoder and quant_conv """
         # multiply all feat dims
-        return self.feature_dims[0] * self.feature_dims[1] * self.feature_dims[2]
+        return self.feat_dims[0] * self.feat_dims[1] * self.feat_dims[2]
     
     def _draw_samples(self, z_mu, z_logstd):
         
@@ -230,7 +245,7 @@ class PoseAutoencoder(AutoencoderKL):
         """
         # x: torch.Size([4, 8])
         flattened_encoded_pose_feat_map = self.pose_encoder(x) # torch.Size([4, 4096]) = 4, 16*16*16     
-        return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.feature_dims[0], self.feature_dims[1], self.feature_dims[2])
+        return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.feat_dims[0], self.feat_dims[1], self.feat_dims[2])
     
     def encode(self, x):
         x = x.to(self.device) # torch.Size([3, 3, 256, 256])
@@ -238,9 +253,10 @@ class PoseAutoencoder(AutoencoderKL):
         moments_obj = self.quant_conv_obj(h) # torch.Size([3, 8, 16, 16])
         pose_feat = self.quant_conv_pose(h) # torch.Size([3, 4, 16, 16])
 
-        if hasattr(self, "quantize"):
-            moments_obj, _, _ = self.quantize(moments_obj) # torch.Size([3, 8, 16, 16])
-        posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
+        if self.quantization:
+            posterior_obj, emb_loss_obj, info_obj = self.quantize(moments_obj) # torch.Size([3, 8, 16, 16])
+        else:
+            posterior_obj = DiagonalGaussianDistribution(moments_obj) # torch.Size([4, 16, 16, 16]) sample
         return posterior_obj, pose_feat
     
     def _get_dropout_prob(self):
@@ -343,7 +359,7 @@ class PoseAutoencoder(AutoencoderKL):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        apply_shift = self.apply_convolutional_shift_img_space or self.apply_convolutional_shift_latent_space
+        apply_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float() # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -386,12 +402,12 @@ class PoseAutoencoder(AutoencoderKL):
                 
             z_obj_pose = z_obj
             
-            if self.apply_convolutional_shift_latent_space:
+            if self.apply_conv_shift_latent_space:
                 z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)
             
             dec_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
             
-            if self.apply_convolutional_shift_img_space and not self.apply_convolutional_shift_latent_space:
+            if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space:
                 dec_obj = self.apply_manual_shift(dec_obj, shift_x, shift_y)
         else:
              # Replace pose with other pose if supervised with other patch
@@ -450,13 +466,16 @@ class PoseAutoencoder(AutoencoderKL):
         rgb_gt = self.get_input(batch, self.image_rgb_key).permute(0, 2, 3, 1).to(self.device) # torch.Size([4, 3, 256, 256]) 
         rgb_gt = self._rescale(rgb_gt)
         rgb_in = rgb_gt.clone()
+        # Get 2D Mask
         mask_2d_bbox = batch["mask_2d_bbox"]
         # Get Pose GT
         pose_gt = self.get_pose_input(batch, self.pose_key).to(self.device) # torch.Size([4, 4]) #
-        # Get 2D Mask
-        mask_gt = self.get_mask_input(batch, self.image_mask_key) # None
-        mask_gt = mask_gt.to(self.device) if mask_gt is not None else None
+        # Get Segmentation Mask
+        segm_mask_gt = self.get_mask_input(batch, self.image_mask_key) # None
+        segm_mask_gt = segm_mask_gt.to(self.device) if segm_mask_gt is not None else None
+        # Get BBOX GT values
         bbox_gt = self.get_bbox_input(batch, self.bbox_key).to(self.device) # torch.Size([4, 3])
+        # Get fill factor in patch
         fill_factor_gt = self.get_fill_factor_input(batch, self.fill_factor_key).to(self.device).float()
         # Get Class GT
         class_gt = self.get_class_input(batch, self.class_key).to(self.device) # torch.Size([4])
@@ -466,7 +485,7 @@ class PoseAutoencoder(AutoencoderKL):
         # torch.Size([4, 3, 256, 256]), torch.Size([4, 8]), torch.Size([4, 16, 16, 16]), torch.Size([4, 7])
         if "pose_6d_2" in batch:
             # Replace RGB and Mask with second patch
-            rgb_gt = self.get_input(batch, "patch_2").permute(0, 2, 3, 1).to(self.device) # torch.Size([4, 3, 256, 256])
+            rgb_gt = self.get_input(batch, self.image_rgb_key+"_2").permute(0, 2, 3, 1).to(self.device) # torch.Size([4, 3, 256, 256])
             rgb_gt = self._rescale(rgb_gt)
             mask_2d_bbox = batch["mask_2d_bbox_2"]
             
@@ -481,10 +500,13 @@ class PoseAutoencoder(AutoencoderKL):
             num_classes = self.num_classes
             class_probs = torch.nn.functional.one_hot(class_gt, num_classes=num_classes).float()
             second_pose = torch.cat((snd_pose, snd_bbox, snd_fill, class_probs), dim=1)
+            # Replace Segmentation Mask
+            segm_mask_gt = self.get_mask_input(batch, self.image_mask_key) # None
+            segm_mask_gt = segm_mask_gt.to(self.device) if segm_mask_gt is not None else None
         else:
             second_pose = None
             
-        return rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose
+        return rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose
     
     def _update_patch_center_rad(self):
         if self.iter_counter >= self.perturb_rad_warmup_steps:
@@ -501,7 +523,8 @@ class PoseAutoencoder(AutoencoderKL):
             self.log("perturb_rad", self.patch_center_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         # Get inputs in right shape
-        rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, class_gt_label, bbox_gt, fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
+            = self.get_all_inputs(batch)
         
         # Run full forward pass
         dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt, second_pose=second_pose)
@@ -511,7 +534,7 @@ class PoseAutoencoder(AutoencoderKL):
         # Train the autoencoder
         if optimizer_idx == 0:
             # train encoder+decoder+logvar # last layer: torch.Size([3, 128, 3, 3])
-            aeloss, log_dict_ae = self.loss(rgb_gt, mask_gt, pose_gt,
+            aeloss, log_dict_ae = self.loss(rgb_gt, segm_mask_gt, pose_gt,
                                             dec_obj, dec_pose,
                                             class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                                             posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
@@ -526,7 +549,7 @@ class PoseAutoencoder(AutoencoderKL):
         # Train the discriminator
         if optimizer_idx == 1:
             # train the discriminator
-            discloss, log_dict_disc = self.loss(rgb_gt, mask_gt, pose_gt,
+            discloss, log_dict_disc = self.loss(rgb_gt, segm_mask_gt, pose_gt,
                                                 dec_obj, dec_pose,
                                                 class_gt, class_gt_label, bbox_gt, fill_factor_gt,
                                                 posterior_obj, bbox_posterior, optimizer_idx, self.iter_counter, mask_2d_bbox,
@@ -542,21 +565,20 @@ class PoseAutoencoder(AutoencoderKL):
     def validation_step(self, batch, batch_idx):
         
         # Get inputs in right shape
-        rgb_in, rgb_gt, pose_gt, mask_gt, \
-            class_gt, class_gt_label, bbox_gt, \
-                fill_factor_gt, mask_2d_bbox, second_pose = self.get_all_inputs(batch)
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
+            = self.get_all_inputs(batch)
         
         # Run full forward pass
         dec_obj, dec_pose, posterior_obj, bbox_posterior = self.forward(rgb_in, pose_gt, second_pose=second_pose)
         
-        _, log_dict_ae = self.loss(rgb_gt, mask_gt, pose_gt,
+        _, log_dict_ae = self.loss(rgb_gt, segm_mask_gt, pose_gt,
                                       dec_obj, dec_pose,
                                       class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                       posterior_obj, bbox_posterior, 0, 
                                       global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
                                       last_layer=self.get_last_layer(), split="val")
 
-        _, log_dict_disc = self.loss(rgb_gt, mask_gt, pose_gt,
+        _, log_dict_disc = self.loss(rgb_gt, segm_mask_gt, pose_gt,
                                         dec_obj, dec_pose,
                                         class_gt, class_gt_label, bbox_gt,fill_factor_gt,
                                         posterior_obj, bbox_posterior, 1, 
@@ -792,9 +814,8 @@ class PoseAutoencoder(AutoencoderKL):
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
 
-        rgb_in, rgb_gt, pose_gt, mask_gt, class_gt, \
-            class_gt_label, bbox_gt, fill_factor_gt, \
-                mask_2d_bbox, second_pose = self.get_all_inputs(batch)
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
+            = self.get_all_inputs(batch)
         
         rgb_in_viz = self._rescale(rgb_in)
         rgb_gt_viz = self._rescale(rgb_gt)

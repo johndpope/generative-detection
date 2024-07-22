@@ -54,7 +54,8 @@ class NuScenesBase(MMDetNuScenesDataset):
         # Setup patch
         self.patch_aspect_ratio = patch_aspect_ratio
         self.patch_size_return = (patch_height, int(patch_height * patch_aspect_ratio)) # aspect ratio is width/height
-        self.perturb_center = perturb_center if self.split != "test" else False
+        # Setup patch shifts and scale
+        self.shift_center = perturb_center if self.split != "test" else False
         self.perturb_scale = perturb_scale if self.split != "test" else False
         # Define mapping from nuscenes label ids to our label ids depending on num of classes we predict
         self.label_id2class_id = {label : i for i, label in enumerate(self.label_ids)}  
@@ -433,7 +434,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         # Mask needs 
         cam_instance.patch_center_2d_original = cam_instance.center_2d
-        if self.perturb_center:
+        if self.shift_center:
             # Random shift of 2D BBOX Center
             shifted_patch_center = self._get_shifted_patch_center(cam_instance.center_2d, cam_instance.bbox)
             # Replace Center 2D with shifted center inside image bounds
