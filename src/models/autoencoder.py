@@ -436,19 +436,19 @@ class PoseAutoencoder(AutoencoderKL):
                 gen_pose = pred_pose
             
             # Run pose encoder layers  
-            z_pose = self.encode_pose(gen_pose) # torch.Size([4, 16, 16, 16])
+            z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
 
             assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
             
             # Add object and pose latents
-            z_obj_pose = z_obj + z_pose # torch.Size([4, 16, 16, 16])
+            z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
         else:
             z_obj_pose = z_obj
             # Compute shift if shift between both patches
             if second_pose is not None:
                 shift_x = second_pose[:, 0] - pose_gt[:, 0]
                 shift_y = second_pose[:, 1] - pose_gt[:, 1]
-                d_shift = shift_x.abs().sum() + shift_y.abs().sum()
+                d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
             else:
                 shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
                 d_shift = torch.tensor([0.0])

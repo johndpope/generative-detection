@@ -33,10 +33,10 @@ model:
         kl_weight_obj: 1.0e-05
         kl_weight_bbox: 0.01
         disc_weight: 0.5
-        pose_weight: 100000
-        fill_factor_weight: 100000
-        class_weight: 1000000
-        bbox_weight: 100000
+        pose_weight: 0.0
+        fill_factor_weight: 0.0
+        class_weight: 0.0
+        bbox_weight: 0.0
         pose_loss_fn: "l1"
         mask_weight: 0
         mask_loss_fn: "l2"

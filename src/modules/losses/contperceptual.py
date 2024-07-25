@@ -276,7 +276,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         mask_loss, weighted_mask_loss = self.get_mask_loss(segm_mask_gt, reconstructions_mask, mask_bg)
         # Compute reconstruction loss
         rec_loss = self._get_rec_loss(rgb_gt, rgb_reconstructions, use_pixel_loss, mask_2d_bbox)
-        nll_loss, weighted_nll_loss = self._get_nll_loss(rec_loss, mask_bg, weights, reduction="mean")
+        nll_loss, weighted_nll_loss = self._get_nll_loss(rec_loss, mask_bg, weights, reduction="sum")
         
         # Compute KL loss for VAE
         # check if posterior_obj is a DiagonalGaussianDistrubution
