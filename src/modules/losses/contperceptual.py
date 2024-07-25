@@ -132,7 +132,8 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         # MSE RGB
         if use_pixel_loss:
             # Compute pixelwise reconstruction only inside 2d bbox
-            rec_loss = (rgb_inputs.contiguous() - rgb_reconstructions.contiguous())* mask_2d_bbox # torch.Size([4, 3, 256, 256])
+            #TODO: ADD mask_2d_bbox back 
+            rec_loss = (rgb_inputs.contiguous() - rgb_reconstructions.contiguous()) # * mask_2d_bbox # torch.Size([4, 3, 256, 256])
             rec_loss = torch.abs(rec_loss)
         else:
             rec_loss = torch.zeros_like(rgb_inputs.contiguous())
@@ -145,7 +146,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             rec_loss = rec_loss + self.perceptual_weight * p_loss # torch.Size([4, 3, 256, 256])
         return rec_loss # torch.Size([4, 3, 256, 256])
 
-    def _get_nll_loss(self, rec_loss, mask_bg, weights=None):
+    def _get_nll_loss(self, rec_loss, mask_bg, weights=None, reduction="none"):
         eps = 1e-8
         nll_loss = rec_loss / (torch.exp(self.logvar) + eps) + self.logvar # torch.Size([4, 3, 256, 256])
         weighted_nll_loss = nll_loss
@@ -153,9 +154,15 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             weighted_nll_loss = weights*nll_loss
         
         masked_nll_loss = nll_loss * mask_bg.unsqueeze(1).unsqueeze(1).unsqueeze(1) # torch.Size([4, 3, 256, 256])
-        nll_loss = torch.sum(masked_nll_loss) / torch.sum(mask_bg) if torch.sum(mask_bg) > 0 else torch.tensor(0.0) 
         masked_weighted_nll_loss = weighted_nll_loss * mask_bg.unsqueeze(1).unsqueeze(1).unsqueeze(1) # torch.Size([4, 3, 256, 256])
-        weighted_nll_loss = torch.sum(masked_weighted_nll_loss) / torch.sum(mask_bg) if torch.sum(mask_bg) > 0 else torch.tensor(0.0)   
+        
+        if reduction == "mean":
+            nll_loss = torch.mean(masked_nll_loss) * (len(mask_bg) / torch.sum(mask_bg)) if torch.sum(mask_bg) > 0 else torch.tensor(0.0)
+            weighted_nll_loss = torch.mean(masked_weighted_nll_loss) * (len(mask_bg) / torch.sum(mask_bg)) if torch.sum(mask_bg) > 0 else torch.tensor(0.0)
+        else:
+            nll_loss = torch.sum(masked_nll_loss) / torch.sum(mask_bg) if torch.sum(mask_bg) > 0 else torch.tensor(0.0)
+            weighted_nll_loss = torch.sum(masked_weighted_nll_loss) / torch.sum(mask_bg) if torch.sum(mask_bg) > 0 else torch.tensor(0.0)
+        
         return nll_loss, weighted_nll_loss
     
     def _get_kl_loss(self, posteriors, mask_bg):
@@ -269,7 +276,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         mask_loss, weighted_mask_loss = self.get_mask_loss(segm_mask_gt, reconstructions_mask, mask_bg)
         # Compute reconstruction loss
         rec_loss = self._get_rec_loss(rgb_gt, rgb_reconstructions, use_pixel_loss, mask_2d_bbox)
-        nll_loss, weighted_nll_loss = self._get_nll_loss(rec_loss, mask_bg, weights)
+        nll_loss, weighted_nll_loss = self._get_nll_loss(rec_loss, mask_bg, weights, reduction="mean")
         
         # Compute KL loss for VAE
         # check if posterior_obj is a DiagonalGaussianDistrubution
@@ -297,7 +304,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             logits_fake = logits_fake * mask_bg.unsqueeze(1).unsqueeze(1).unsqueeze(1)
             g_loss = -torch.mean(logits_fake)
 
-            if self.disc_factor > 0.0 and global_step > self.encoder_pretrain_steps:
+            if self.disc_factor > 0.0 and global_step >= self.encoder_pretrain_steps:
                 try:
                     d_weight = self.calculate_adaptive_weight(nll_loss, g_loss, last_layer=last_layer)
                 except RuntimeError:

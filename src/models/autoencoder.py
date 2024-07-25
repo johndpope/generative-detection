@@ -93,17 +93,18 @@ class PoseAutoencoder(AutoencoderKL):
         self.obj_quantization = quantize_obj
         self.pose_quantization = quantize_pose
         
+        quant_conv_obj_embed_dim = embed_dim if quantize_obj else 2*embed_dim
+        
         if quantize_obj:
             assert quantconfig is not None, "quantconfig is not defined but quantize_obj is set to True."
+            quantconfig["params"]["e_dim"] = embed_dim
             self.quantize_obj = instantiate_from_config(quantconfig)
         
         if quantize_pose:
             assert quantconfig is not None, "quantconfig is not defined but quantize_pose is set to True."
+            quantconfig["params"]["e_dim"] = embed_dim
             self.quantize_pose = instantiate_from_config(quantconfig)
-        
-        quant_conv_obj_embed_dim = embed_dim if hasattr(self, "quantize_obj") else 2*embed_dim
 
-        # assert ddconfig["double_z"]
         if ddconfig["double_z"]:
             mult_z = 2
         else:
@@ -124,7 +125,7 @@ class PoseAutoencoder(AutoencoderKL):
         spatial_dim = (np.array([1/k for k in ddconfig["ch_mult"]]).prod()  * 256).astype(int)
         self.add_noise_to_z_obj = add_noise_to_z_obj
         self.feat_dims = [embed_dim, spatial_dim, spatial_dim]
-        self.embed_dim = embed_dim
+        
         self.z_channels = ddconfig["z_channels"]
         # enc_feat_dims = self._get_enc_feat_dims(ddconfig)
         
@@ -274,8 +275,7 @@ class PoseAutoencoder(AutoencoderKL):
         return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.z_channels, self.feat_dims[1], self.feat_dims[2])
     
     def encode(self, x):
-        x = x.to(self.device) # torch.Size([B, 3, 256, 256])
-        h = self.encoder(x) # torch.Size([B, 32, 16, 16])
+        h = self.encoder(x) # torch.Size([B, F, 16, 16])
         moments_obj = self.quant_conv_obj(h) # torch.Size([B, 32, 16, 16])
         pose_feat = self.quant_conv_pose(h) # torch.Size([B, 16, 16, 16])
         
@@ -396,7 +396,7 @@ class PoseAutoencoder(AutoencoderKL):
         """
         apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
         # reshape input_im to (batch_size, 3, 256, 256)
-        input_im = input_im.to(memory_format=torch.contiguous_format).float() # torch.Size([4, 3, 256, 256])
+        input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
         posterior_obj, pose_feat, q_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
         
@@ -448,24 +448,23 @@ class PoseAutoencoder(AutoencoderKL):
             if second_pose is not None:
                 shift_x = second_pose[:, 0] - pose_gt[:, 0]
                 shift_y = second_pose[:, 1] - pose_gt[:, 1]
-                
+                d_shift = shift_x.abs().sum() + shift_y.abs().sum()
             else:
                 shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
+                d_shift = torch.tensor([0.0])
         
         # Apply shift in latent space
-        if self.apply_conv_shift_latent_space:
+        if self.apply_conv_shift_latent_space and d_shift:
             z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
         
         # Predict images from object and pose latents
         pred_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
         
         # Apply shift in image space
-        if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space:
+        if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space and d_shift:
             pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
-
-        if return_pred_indices:
-            return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
-        return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss
+            
+        return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
     def get_pose_input(self, batch, k, postfix=""):
         x = batch[k+postfix] 
@@ -800,8 +799,8 @@ class PoseAutoencoder(AutoencoderKL):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
 
-        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss = self.forward(rgb_in, pose_gt, second_pose=second_pose)
-        xrec, poserec, posterior_obj, bbox_posterior, q_loss = self.forward(rgb_in, pose_gt)
+        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=second_pose)
+        xrec, poserec, posterior_obj, bbox_posterior, q_loss, _, _ = self.forward(rgb_in, pose_gt)
         
         xrec_rgb = xrec[:, :3, :, :] # torch.Size([8, 3, 64, 64])
         xrec_rgb_2 = xrec_2[:, :3, :, :] # torch.Size([8, 3, 64, 64])
@@ -847,7 +846,7 @@ class PoseAutoencoder(AutoencoderKL):
         for idx, snd_pose in enumerate(second_pose):
             # torch.Size([1, 4])
             snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
-            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss = self.forward(rgb_in, pose_gt, second_pose=snd_pose)
+            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=snd_pose)
             xrec_rgb_2 = xrec_2[:, :3, :, :]    
 
             if rgb_in_viz.shape[1] > 3:

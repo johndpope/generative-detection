@@ -512,6 +512,7 @@ def main():
 
         return loss, val_log, img_log
     if opt.train:
+        print(model)
         loss, val_log, img_log = run_one_iteration(model, data)
     else:
         dataloader = data.test_dataloader()
