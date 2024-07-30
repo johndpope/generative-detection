@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 4.5e-6
-  target: src.models.autoencoder.PoseAutoencoder
+  target: src.models.autoencoder.AdaptivePoseAutoencoder
   params:
     quantize_obj: False
     quantize_pose: False

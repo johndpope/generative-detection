@@ -19,7 +19,7 @@ from ldm.util import instantiate_from_config
 from ldm.modules.ema import LitEma
 
 from src.modules.autoencodermodules.feat_encoder import FeatEncoder
-from src.modules.autoencodermodules.feat_decoder import FeatDecoder
+from src.modules.autoencodermodules.feat_decoder import FeatDecoder, AdaptiveFeatDecoder
 from src.modules.autoencodermodules.pose_encoder import PoseEncoderSpatialVAE as PoseEncoder
 from src.modules.autoencodermodules.pose_decoder import PoseDecoderSpatialVAE as PoseDecoder
 from src.util.distributions import DiagonalGaussianDistribution
@@ -37,7 +37,7 @@ class Autoencoder(AutoencoderKL):
     """Autoencoder model with KL divergence loss."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
 class PoseAutoencoder(AutoencoderKL):
     """
     Autoencoder model for pose encoding and decoding.
@@ -784,17 +784,6 @@ class PoseAutoencoder(AutoencoderKL):
         assert pose_6d_perturbed_ret.shape == dec_pose.shape, f"pose_6d_perturbed_ret shape: {pose_6d_perturbed_ret.shape}"
         return pose_6d_perturbed_ret.to(self.device) # torch.Size([4, 8])
  
-    def _perturbed_pose_forward(self, posterior_obj, dec_pose, batch, sample_posterior=True):
-        if sample_posterior:
-            z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
-        else:
-            z_obj = posterior_obj.mode()
-        dec_pose_perturbed = self._perturb_poses(batch, dec_pose) # torch.Size([4, 8])
-        enc_pose_perturbed = self.encode_pose(dec_pose_perturbed) # torch.Size([4, 16, 16, 16])
-        z_obj_pose_perturbed = z_obj + enc_pose_perturbed # torch.Size([4, 16, 16, 16])
-        dec_obj_pose_perturbed = self.decode(z_obj_pose_perturbed) # torch.Size([4, 3, 256, 256])
-        return dec_obj_pose_perturbed
-
     def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
@@ -894,3 +883,135 @@ class PoseAutoencoder(AutoencoderKL):
         # x = torch.clamp(x, 0., 1.)
         # x = (2. * x) - 1.
         return x
+
+
+
+class AdaptivePoseAutoencoder(PoseAutoencoder):
+    def __init__(self,
+                 ddconfig,
+                 lossconfig,
+                 embed_dim,
+                 ckpt_path=None,
+                 ignore_keys=[],
+                 image_mask_key=None,
+                 image_rgb_key="patch",
+                 pose_key="pose_6d",
+                 fill_factor_key="fill_factor",
+                 pose_perturbed_key="pose_6d_perturbed",
+                 class_key="class_id",
+                 bbox_key="bbox_sizes",
+                 colorize_nlabels=None,
+                 monitor=None,
+                 pose_decoder_config=None,
+                 pose_encoder_config=None,
+                 dropout_prob_init=1.0,
+                 dropout_prob_final=0.7,
+                 dropout_warmup_steps=5000,
+                 pose_conditioned_generation_steps=10000,
+                 perturb_rad_warmup_steps=100000,
+                 intermediate_img_feature_leak_steps=0,
+                 add_noise_to_z_obj=False,
+                 train_on_yaw=True,
+                 ema_decay=0.999,
+                 apply_convolutional_shift_img_space=False,
+                 apply_convolutional_shift_latent_space=False,
+                 quantconfig=None,
+                 quantize_obj=False,
+                 quantize_pose=False,
+                 **kwargs
+                 ):
+        super().__init__(ddconfig, lossconfig, embed_dim, ckpt_path, ignore_keys, image_mask_key, image_rgb_key, pose_key, fill_factor_key, pose_perturbed_key, class_key, bbox_key, colorize_nlabels, monitor, pose_decoder_config, pose_encoder_config, dropout_prob_init, dropout_prob_final, dropout_warmup_steps, pose_conditioned_generation_steps, perturb_rad_warmup_steps, intermediate_img_feature_leak_steps, add_noise_to_z_obj, train_on_yaw, ema_decay, apply_convolutional_shift_img_space, apply_convolutional_shift_latent_space, quantconfig, quantize_obj, quantize_pose, **kwargs)
+        self.decoder = AdaptiveFeatDecoder(**ddconfig)
+    
+    def decode(self, z, pose):
+        z = self.post_quant_conv(z)
+        dec = self.decoder(z, pose)
+        return dec
+
+    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, return_pred_indices=False):
+        """
+        Forward pass of the autoencoder model.
+        
+        Args:
+            input (Tensor): Input tensor to the autoencoder.
+            sample_posterior (bool, optional): Whether to sample from the posterior distribution or use the mode.
+        
+        Returns:
+            pred_objdec_obj (Tensor): Decoded object tensor.
+            dec_pose (Tensor): Decoded pose tensor.
+            posterior_obj (Distribution): Posterior distribution of the object latent space.
+            posterior_pose (Distribution): Posterior distribution of the pose latent space.
+        """
+        apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
+        # reshape input_im to (batch_size, 3, 256, 256)
+        input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
+        # Encode Image
+        posterior_obj, pose_feat, q_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_im) # Distribution: torch.Size([4, 16, 16, 16]), torch.Size([4, 16, 16, 16])
+        
+        if self.obj_quantization:
+            z_obj = posterior_obj
+        else:
+            # Sample from posterior distribution or use mode
+            if sample_posterior: # True
+                z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
+            else:
+                z_obj = posterior_obj.mode()
+                
+        # Extract pose information from pose features
+        pred_pose, bbox_posterior = self.decode_pose(pose_feat, sample_posterior=sample_posterior if not self.obj_quantization else False) # torch.Size([4, 8]), torch.Size([4, 7])
+        
+        # Dropout object feature latents
+        self.dropout_prob = self._get_dropout_prob()
+        if self.dropout_prob > 0:
+            dropout = nn.Dropout(p=self.dropout_prob)
+            z_obj = dropout(z_obj)
+            
+        if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
+            pred_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
+        
+        # Add gaussian noise to object feature latents
+        # if self.add_noise_to_z_obj:
+        #     # draw from standard normal distribution
+        #     std_normal = Normal(0, 1)
+        #     z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
+        #     z_obj = z_obj + z_obj_noise
+            
+        if not apply_manual_shift:
+             # Replace pose with other pose if supervised with other patch
+            if second_pose is not None:
+                gen_pose = second_pose.to(pred_pose)
+            else:
+                gen_pose = pred_pose
+            
+            # Run pose encoder layers  
+            z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
+
+            assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
+            
+            # Add object and pose latents
+            z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
+        else:
+            z_obj_pose = z_obj
+            # Compute shift if shift between both patches
+            if second_pose is not None:
+                shift_x = second_pose[:, 0] - pose_gt[:, 0]
+                shift_y = second_pose[:, 1] - pose_gt[:, 1]
+                d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
+            else:
+                shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
+                d_shift = torch.tensor([0.0])
+        
+        # Apply shift in latent space
+        if self.apply_conv_shift_latent_space and d_shift:
+            z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
+        
+        # Predict images from object and pose latents
+        pred_obj = self.decode(z_obj_pose, gen_pose) # torch.Size([4, 3, 256, 256])
+        
+        # Apply shift in image space
+        if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space and d_shift:
+            pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
+            
+        return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
+
+        
