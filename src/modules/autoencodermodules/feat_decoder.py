@@ -4,17 +4,43 @@ import torch.nn as nn
 from src.modules.autoencodermodules.adaptiveconv import SynthesisLayer as AdpativeConv2dLayer
 import numpy as np
 import torch
-from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample
+from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample, nonlinearity
 
 class FeatDecoder(LDMDecoder):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, num_channels=13, num_frequencies=6):
+        super(PositionalEncoding, self).__init__()
+        self.num_channels = num_channels
+        self.num_frequencies = num_frequencies
+        
+        self.output_dim = num_channels * 2 * self.num_frequencies
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        x = x.unsqueeze(-1)  # Shape: (batch_size, 13, 1)
+        
+        # Prepare the frequency bands
+        frequencies = torch.arange(self.num_frequencies, dtype=torch.float32).to(x.device)
+        frequencies = 2 ** frequencies * torch.pi  # Shape: (6,)
+        
+        # Compute the positional encodings
+        sinusoids = torch.einsum('bix,f->bixf', x, frequencies)  # Shape: (batch_size, 13, 1, 6)
+        sinusoids = torch.cat([torch.sin(sinusoids), torch.cos(sinusoids)], dim=-1)  # Shape: (batch_size, 13, 1, 12)
+        
+        # Flatten the last two dimensions
+        sinusoids = sinusoids.view(batch_size, self.output_dim)  # Shape: (batch_size, 156)
+        
+        return sinusoids
+
 class AdaptiveFeatDecoder(nn.Module):
     def __init__(self, *, ch, out_ch, pose_dim=13, w_dim=512, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
-                 attn_type="vanilla", **ignorekwargs):
+                 attn_type="vanilla", pose_embedding_layers=1, 
+                 pose_embedding_map_hidden_dim=512, pe_num_frequencies=6, **ignorekwargs):
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -87,12 +113,30 @@ class AdaptiveFeatDecoder(nn.Module):
         #                                 stride=1,
         #                                 padding=1)
 
-        # pose embedding map
-        self.pose_embedding_map = torch.nn.Linear(pose_dim, w_dim)
+        # add PositionalEncoding with k channels
+        self.pose_pe = PositionalEncoding(num_channels=pose_dim, num_frequencies=pe_num_frequencies)
 
+        # pose embedding map: maps pose_pe output to w
+        curr_in_dim = self.pose_pe.output_dim
+        curr_out_dim = pose_embedding_map_hidden_dim
+        pose_embedding_map = nn.Sequential()
+        for N in range(pose_embedding_layers):
+            if N == (pose_embedding_layers - 1):
+                curr_out_dim = w_dim
+            else:
+                curr_out_dim = pose_embedding_map_hidden_dim
+            
+            pose_embedding_map.add_module(f'layer_{N}', nn.Linear(curr_in_dim, curr_out_dim))
+
+            curr_in_dim = curr_out_dim
+
+        self.pose_embedding_map = pose_embedding_map
+        
+        
     def forward(self, z, pose):
-        # pose --> w
-        w = self.pose_embedding_map(pose)
+        # pose --> pose_pe --> w
+        pose_pe = self.pose_pe(pose)
+        w = self.pose_embedding_map(pose_pe)
 
         #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
@@ -101,12 +145,12 @@ class AdaptiveFeatDecoder(nn.Module):
         temb = None
 
         # z to block_in
-        h = self.conv_in(z, w)
+        h = self.conv_in(z, w) # torch.Size([8, 16, 16, 16]), torch.Size([8, 512])
 
         # middle
-        h = self.mid.block_1(h, w, temb)
-        h = self.mid.attn_1(h)
-        h = self.mid.block_2(h, w, temb)
+        h = self.mid.block_1(h, w, temb) # torch.Size([8, 512, 16, 16])
+        h = self.mid.attn_1(h)# torch.Size([8, 512, 16, 16])
+        h = self.mid.block_2(h, w, temb) # torch.Size([8, 512, 16, 16])
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):

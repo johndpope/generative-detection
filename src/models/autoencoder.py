@@ -922,6 +922,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                  ):
         super().__init__(ddconfig, lossconfig, embed_dim, ckpt_path, ignore_keys, image_mask_key, image_rgb_key, pose_key, fill_factor_key, pose_perturbed_key, class_key, bbox_key, colorize_nlabels, monitor, pose_decoder_config, pose_encoder_config, dropout_prob_init, dropout_prob_final, dropout_warmup_steps, pose_conditioned_generation_steps, perturb_rad_warmup_steps, intermediate_img_feature_leak_steps, add_noise_to_z_obj, train_on_yaw, ema_decay, apply_convolutional_shift_img_space, apply_convolutional_shift_latent_space, quantconfig, quantize_obj, quantize_pose, **kwargs)
         self.decoder = AdaptiveFeatDecoder(**ddconfig)
+        assert not self.apply_conv_shift_img_space, "Not supporting shift in image space for adaptive pose autoencoder"
+        assert not self.apply_conv_shift_latent_space, "Not supporting shift in latent space for adaptive pose autoencoder"
     
     def decode(self, z, pose):
         z = self.post_quant_conv(z)
@@ -942,7 +944,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
+        # apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -976,41 +978,41 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         #     z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
         #     z_obj = z_obj + z_obj_noise
             
-        if not apply_manual_shift:
-             # Replace pose with other pose if supervised with other patch
-            if second_pose is not None:
-                gen_pose = second_pose.to(pred_pose)
-            else:
-                gen_pose = pred_pose
-            
-            # Run pose encoder layers  
-            z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
-
-            assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
-            
-            # Add object and pose latents
-            z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
+        # if not apply_manual_shift:
+        # Replace pose with other pose if supervised with other patch
+        if second_pose is not None:
+            gen_pose = second_pose.to(pred_pose)
         else:
-            z_obj_pose = z_obj
-            # Compute shift if shift between both patches
-            if second_pose is not None:
-                shift_x = second_pose[:, 0] - pose_gt[:, 0]
-                shift_y = second_pose[:, 1] - pose_gt[:, 1]
-                d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
-            else:
-                shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
-                d_shift = torch.tensor([0.0])
+            gen_pose = pred_pose
         
-        # Apply shift in latent space
-        if self.apply_conv_shift_latent_space and d_shift:
-            z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
+        # Run pose encoder layers  
+        z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
+
+        assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
+        
+        # Add object and pose latents
+        z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
+        # else:
+        #     z_obj_pose = z_obj
+        #     # Compute shift if shift between both patches
+        #     if second_pose is not None:
+        #         shift_x = second_pose[:, 0] - pose_gt[:, 0]
+        #         shift_y = second_pose[:, 1] - pose_gt[:, 1]
+        #         d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
+        #     else:
+        #         shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
+        #         d_shift = torch.tensor([0.0])
+        
+        # # Apply shift in latent space
+        # if self.apply_conv_shift_latent_space and d_shift:
+        #     z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
         
         # Predict images from object and pose latents
         pred_obj = self.decode(z_obj_pose, gen_pose) # torch.Size([4, 3, 256, 256])
         
-        # Apply shift in image space
-        if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space and d_shift:
-            pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
+        # # Apply shift in image space
+        # if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space and d_shift:
+        #     pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
             
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
