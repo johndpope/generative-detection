@@ -863,9 +863,9 @@ class PoseAutoencoder(AutoencoderKL):
         if not only_inputs:
             log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="")
 
-            # EMA weights visualization
-            with self.ema_scope():
-                log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema")
+            # # EMA weights visualization
+            # with self.ema_scope():
+            #     log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema")
         return log
     
     def _rescale(self, x):

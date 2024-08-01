@@ -4,7 +4,7 @@ import torch.nn as nn
 from src.modules.autoencodermodules.adaptiveconv import SynthesisLayer as AdpativeConv2dLayer
 import numpy as np
 import torch
-from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample, nonlinearity
+from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample, nonlinearity, ResnetBlock
 
 class FeatDecoder(LDMDecoder):
     def __init__(self, **kwargs):
@@ -61,7 +61,7 @@ class AdaptiveFeatDecoder(nn.Module):
             self.z_shape, np.prod(self.z_shape)))
 
         # z to block_in
-        self.conv_in = AdpativeConv2dLayer(z_channels,
+        self.conv_in = AdpativeConv2dLayer(z_channels, # 16
                                             block_in,
                                             w_dim=w_dim,
                                             resolution=16,
@@ -88,7 +88,7 @@ class AdaptiveFeatDecoder(nn.Module):
             attn = nn.ModuleList()
             block_out = ch*ch_mult[i_level]
             for i_block in range(self.num_res_blocks+1):
-                block.append(AdaptiveResnetBlock(in_channels=block_in,
+                block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
@@ -105,13 +105,20 @@ class AdaptiveFeatDecoder(nn.Module):
 
         # end
         self.norm_out = Normalize(block_in)
-        self.conv_out = AdpativeConv2dLayer(block_in,
+
+        # TODO: change to AdpativeConv2dLayer
+        self.conv_out = torch.nn.Conv2d(block_in,
                                         out_ch,
-                                        w_dim=w_dim,
-                                        resolution=16,
-                                        kernel_size=3,)
-        #                                 stride=1,
-        #                                 padding=1)
+                                        kernel_size=3,
+                                        stride=1,
+                                        padding=1)
+        # self.conv_out = AdpativeConv2dLayer(block_in,
+        #                                 out_ch,
+        #                                 w_dim=w_dim,
+        #                                 resolution=resolution,
+        #                                 kernel_size=3,)
+        # #                                 stride=1,
+        # #                                 padding=1)
 
         # add PositionalEncoding with k channels
         self.pose_pe = PositionalEncoding(num_channels=pose_dim, num_frequencies=pe_num_frequencies)
@@ -135,8 +142,9 @@ class AdaptiveFeatDecoder(nn.Module):
         
     def forward(self, z, pose):
         # pose --> pose_pe --> w
-        pose_pe = self.pose_pe(pose)
-        w = self.pose_embedding_map(pose_pe)
+        # pose: torch.Size([4, 13])
+        pose_pe = self.pose_pe(pose) # torch.Size([4, 156])
+        w = self.pose_embedding_map(pose_pe) # torch.Size([4, 512])
 
         #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
@@ -145,17 +153,19 @@ class AdaptiveFeatDecoder(nn.Module):
         temb = None
 
         # z to block_in
-        h = self.conv_in(z, w) # torch.Size([8, 16, 16, 16]), torch.Size([8, 512])
+        # torch.Size([4, 16, 16, 16]), torch.Size([4, 512])
+        h = self.conv_in(z, w) #[4, 512, 16, 16])
+
 
         # middle
-        h = self.mid.block_1(h, w, temb) # torch.Size([8, 512, 16, 16])
-        h = self.mid.attn_1(h)# torch.Size([8, 512, 16, 16])
-        h = self.mid.block_2(h, w, temb) # torch.Size([8, 512, 16, 16])
+        h = self.mid.block_1(h, w, temb) # torch.Size([4, 512, 16, 16])
+        h = self.mid.attn_1(h)# torch.Size([4, 512, 16, 16])
+        h = self.mid.block_2(h, w, temb) # torch.Size([4, 512, 16, 16])
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks+1):
-                h = self.up[i_level].block[i_block](h, w, temb)
+                h = self.up[i_level].block[i_block](h, temb) # torch.Size([4, 512, 16, 16])
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
@@ -167,7 +177,7 @@ class AdaptiveFeatDecoder(nn.Module):
 
         h = self.norm_out(h)
         h = nonlinearity(h)
-        h = self.conv_out(h, w)
+        h = self.conv_out(h) # torch.Size([4, 128, 256, 256])
         if self.tanh_out:
             h = torch.tanh(h)
         return h

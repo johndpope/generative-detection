@@ -138,7 +138,6 @@ class SynthesisLayer(torch.nn.Module):
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter)) # [1, 3, 3, 1]
         self.padding = kernel_size // 2 #3 // 2 = 1
         self.act_gain = bias_act.activation_funcs[activation].def_gain # 1.4142135623730951
-
         self.affine = FullyConnectedLayer(w_dim, in_channels, bias_init=1) # 512, 512, 1
         memory_format = torch.channels_last if channels_last else torch.contiguous_format # channels_last=False
         # 512, 512, 3, 3
