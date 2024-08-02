@@ -109,12 +109,6 @@ class AdaptiveFeatDecoder(nn.Module):
         # end
         self.norm_out = Normalize(block_in)
 
-        # TODO: change to AdpativeConv2dLayer
-        # self.conv_out = torch.nn.Conv2d(block_in,
-        #                                 out_ch,
-        #                                 kernel_size=3,
-        #                                 stride=1,
-        #                                 padding=1)
         self.conv_out = AdpativeConv2dLayer(block_in,
                                         out_ch,
                                         w_dim=w_dim,
