@@ -64,7 +64,7 @@ class AdaptiveFeatDecoder(nn.Module):
         self.conv_in = AdpativeConv2dLayer(z_channels, # 16
                                             block_in,
                                             w_dim=w_dim,
-                                            resolution=16,
+                                            resolution=curr_res,
                                             kernel_size=3)
             #                            stride=1,
             #                            padding=1)
@@ -72,11 +72,13 @@ class AdaptiveFeatDecoder(nn.Module):
         # middle
         self.mid = nn.Module()
         self.mid.block_1 = AdaptiveResnetBlock(in_channels=block_in,
+                                        resolution=curr_res,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
                                        dropout=dropout)
         self.mid.attn_1 = make_attn(block_in, attn_type=attn_type)
         self.mid.block_2 = AdaptiveResnetBlock(in_channels=block_in,
+                                        resolution=curr_res,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
                                        dropout=dropout)
@@ -88,7 +90,8 @@ class AdaptiveFeatDecoder(nn.Module):
             attn = nn.ModuleList()
             block_out = ch*ch_mult[i_level]
             for i_block in range(self.num_res_blocks+1):
-                block.append(ResnetBlock(in_channels=block_in,
+                block.append(AdaptiveResnetBlock(in_channels=block_in,
+                                        resolution=curr_res,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
@@ -107,18 +110,18 @@ class AdaptiveFeatDecoder(nn.Module):
         self.norm_out = Normalize(block_in)
 
         # TODO: change to AdpativeConv2dLayer
-        self.conv_out = torch.nn.Conv2d(block_in,
-                                        out_ch,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
-        # self.conv_out = AdpativeConv2dLayer(block_in,
+        # self.conv_out = torch.nn.Conv2d(block_in,
         #                                 out_ch,
-        #                                 w_dim=w_dim,
-        #                                 resolution=resolution,
-        #                                 kernel_size=3,)
-        # #                                 stride=1,
-        # #                                 padding=1)
+        #                                 kernel_size=3,
+        #                                 stride=1,
+        #                                 padding=1)
+        self.conv_out = AdpativeConv2dLayer(block_in,
+                                        out_ch,
+                                        w_dim=w_dim,
+                                        resolution=curr_res,
+                                        kernel_size=3,)
+        #                                 stride=1,
+        #                                 padding=1)
 
         # add PositionalEncoding with k channels
         self.pose_pe = PositionalEncoding(num_channels=pose_dim, num_frequencies=pe_num_frequencies)
@@ -165,7 +168,7 @@ class AdaptiveFeatDecoder(nn.Module):
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks+1):
-                h = self.up[i_level].block[i_block](h, temb) # torch.Size([4, 512, 16, 16])
+                h = self.up[i_level].block[i_block](h, w, temb) # torch.Size([4, 512, 16, 16])
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
@@ -177,13 +180,13 @@ class AdaptiveFeatDecoder(nn.Module):
 
         h = self.norm_out(h)
         h = nonlinearity(h)
-        h = self.conv_out(h) # torch.Size([4, 128, 256, 256])
+        h = self.conv_out(h, w) # torch.Size([4, 128, 256, 256])
         if self.tanh_out:
             h = torch.tanh(h)
         return h
 
 class AdaptiveResnetBlock(nn.Module):
-    def __init__(self, *, in_channels, out_channels=None, conv_shortcut=False,
+    def __init__(self, *, in_channels, resolution, w_dim=512, out_channels=None, conv_shortcut=False,
                  dropout, temb_channels=512):
         super().__init__()
         self.in_channels = in_channels
@@ -194,8 +197,8 @@ class AdaptiveResnetBlock(nn.Module):
         self.norm1 = Normalize(in_channels)
         self.conv1 = AdpativeConv2dLayer(in_channels,
                                         out_channels,
-                                        w_dim=512,
-                                        resolution=16,
+                                        w_dim=w_dim,
+                                        resolution=resolution,
                                         kernel_size=3,)
         #                              stride=1,
         #                              padding=1)
@@ -207,8 +210,8 @@ class AdaptiveResnetBlock(nn.Module):
 
         self.conv2 = AdpativeConv2dLayer(out_channels,
                                         out_channels,
-                                        w_dim=512,
-                                        resolution=16,
+                                        w_dim=w_dim,
+                                        resolution=resolution,
                                         kernel_size=3,)
         #                              stride=1,
         #                              padding=1)
@@ -216,16 +219,16 @@ class AdaptiveResnetBlock(nn.Module):
             if self.use_conv_shortcut:
                 self.conv_shortcut = AdpativeConv2dLayer(in_channels,
                                                      out_channels,
-                                                     w_dim=512,
-                                                    resolution=16,
+                                                     w_dim=w_dim,
+                                                    resolution=resolution,
                                                      kernel_size=3,)
                                                     #  stride=1,
                                                     #  padding=1)
-            else:
+            else: # TODO: shouldnt go here... so self.use_conv_shortcut must be True
                 self.nin_shortcut = AdpativeConv2dLayer(in_channels,
                                                     out_channels,
-                                                    w_dim=512,
-                                                    resolution=16,
+                                                    w_dim=w_dim,
+                                                    resolution=resolution,
                                                     kernel_size=1,)
                                                     # stride=1,
                                                     # padding=0)

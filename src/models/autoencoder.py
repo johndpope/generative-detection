@@ -204,8 +204,9 @@ class PoseAutoencoder(AutoencoderKL):
                     print(f"{context}: Restored training weights")
 
     def on_train_batch_end(self, *args, **kwargs):
-        if self.use_ema:
-            self.model_ema(self)
+        pass
+        # if self.use_ema:
+        #     self.model_ema(self)
         
     def _get_enc_feat_dims(self, ddconfig):
         """ pass in dummy input of size from config to get the output size of encoder and quant_conv """
