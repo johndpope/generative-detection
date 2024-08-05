@@ -90,7 +90,7 @@ class AdaptiveFeatDecoder(nn.Module):
             attn = nn.ModuleList()
             block_out = ch*ch_mult[i_level]
             for i_block in range(self.num_res_blocks+1):
-                block.append(AdaptiveResnetBlock(in_channels=block_in,
+                block.append(ResnetBlock(in_channels=block_in,
                                         resolution=curr_res,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
@@ -108,12 +108,17 @@ class AdaptiveFeatDecoder(nn.Module):
 
         # end
         self.norm_out = Normalize(block_in)
-
-        self.conv_out = AdpativeConv2dLayer(block_in,
+        self.conv_out = torch.nn.Conv2d(block_in,
                                         out_ch,
-                                        w_dim=w_dim,
-                                        resolution=curr_res,
-                                        kernel_size=3,)
+                                        kernel_size=3,
+                                        stride=1,
+                                        padding=1)
+
+        # self.conv_out = AdpativeConv2dLayer(block_in,
+        #                                 out_ch,
+        #                                 w_dim=w_dim,
+        #                                 resolution=curr_res,
+        #                                 kernel_size=3,)
         #                                 stride=1,
         #                                 padding=1)
 
@@ -162,7 +167,7 @@ class AdaptiveFeatDecoder(nn.Module):
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks+1):
-                h = self.up[i_level].block[i_block](h, w, temb) # torch.Size([4, 512, 16, 16])
+                h = self.up[i_level].block[i_block](h, temb) # torch.Size([4, 512, 16, 16])
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
@@ -174,7 +179,7 @@ class AdaptiveFeatDecoder(nn.Module):
 
         h = self.norm_out(h)
         h = nonlinearity(h)
-        h = self.conv_out(h, w) # torch.Size([4, 128, 256, 256])
+        h = self.conv_out(h) # torch.Size([4, 128, 256, 256])
         if self.tanh_out:
             h = torch.tanh(h)
         return h
