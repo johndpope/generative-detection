@@ -91,7 +91,7 @@ class AdaptiveFeatDecoder(nn.Module):
             block_out = ch*ch_mult[i_level]
             for i_block in range(self.num_res_blocks+1):
                 block.append(ResnetBlock(in_channels=block_in,
-                                        resolution=curr_res,
+                                        # resolution=curr_res,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
