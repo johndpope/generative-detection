@@ -106,6 +106,7 @@ data:
         perturb_center: False
         perturb_scale: False
         perturb_prob: 0.8
+        perturb_z: True
     validation:
       target: src.data.datasets.nuscenes.NuScenesValidationMini
       params:
@@ -126,6 +127,7 @@ data:
         perturb_center: False
         perturb_scale: False
         perturb_prob: 0.0
+        perturb_z: True
     test:
       target: src.data.datasets.nuscenes.NuScenesTest
       params:
