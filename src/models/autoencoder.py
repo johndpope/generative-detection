@@ -204,9 +204,9 @@ class PoseAutoencoder(AutoencoderKL):
                     print(f"{context}: Restored training weights")
 
     def on_train_batch_end(self, *args, **kwargs):
-        pass
-        # if self.use_ema:
-        #     self.model_ema(self)
+        # pass
+        if self.use_ema:
+            self.model_ema(self)
         
     def _get_enc_feat_dims(self, ddconfig):
         """ pass in dummy input of size from config to get the output size of encoder and quant_conv """
@@ -864,9 +864,9 @@ class PoseAutoencoder(AutoencoderKL):
         if not only_inputs:
             log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="")
 
-            # # EMA weights visualization
-            # with self.ema_scope():
-            #     log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema")
+            # EMA weights visualization
+            with self.ema_scope():
+                log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema")
         return log
     
     def _rescale(self, x):
@@ -921,8 +921,118 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                  quantize_pose=False,
                  **kwargs
                  ):
-        super().__init__(ddconfig, lossconfig, embed_dim, ckpt_path, ignore_keys, image_mask_key, image_rgb_key, pose_key, fill_factor_key, pose_perturbed_key, class_key, bbox_key, colorize_nlabels, monitor, pose_decoder_config, pose_encoder_config, dropout_prob_init, dropout_prob_final, dropout_warmup_steps, pose_conditioned_generation_steps, perturb_rad_warmup_steps, intermediate_img_feature_leak_steps, add_noise_to_z_obj, train_on_yaw, ema_decay, apply_convolutional_shift_img_space, apply_convolutional_shift_latent_space, quantconfig, quantize_obj, quantize_pose, **kwargs)
+        pl.LightningModule.__init__(self)
+        
+        # Inputs
+        self.image_rgb_key = image_rgb_key
+        self.pose_key = pose_key
+        self.pose_perturbed_key = pose_perturbed_key
+        self.class_key = class_key
+        self.bbox_key = bbox_key
+        self.fill_factor_key = fill_factor_key
+        self.image_mask_key = image_mask_key
+        self.train_on_yaw = train_on_yaw
+        
+        # Encoder Setup
+        self.encoder = FeatEncoder(**ddconfig)
+        self.obj_quantization = quantize_obj
+        self.pose_quantization = quantize_pose
+        
+        quant_conv_obj_embed_dim = embed_dim if quantize_obj else 2*embed_dim
+        
+        if quantize_obj:
+            assert quantconfig is not None, "quantconfig is not defined but quantize_obj is set to True."
+            quantconfig["params"]["e_dim"] = embed_dim
+            self.quantize_obj = instantiate_from_config(quantconfig)
+        
+        if quantize_pose:
+            assert quantconfig is not None, "quantconfig is not defined but quantize_pose is set to True."
+            quantconfig["params"]["e_dim"] = embed_dim
+            self.quantize_pose = instantiate_from_config(quantconfig)
+
+        if ddconfig["double_z"]:
+            mult_z = 2
+        else:
+            mult_z = 1
+            
+        self.quant_conv_obj = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], quant_conv_obj_embed_dim, 1)
+        self.quant_conv_pose = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
+        self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        if quantconfig is not None:
+            self.quantization = True
+            self.quantize = instantiate_from_config(quantconfig)
+        else:
+            self.quantization = False
+            
+        self.encoder_pretrain_steps = lossconfig["params"]["encoder_pretrain_steps"]
+        
+        # Object latent
+        spatial_dim = (np.array([1/k for k in ddconfig["ch_mult"]]).prod()  * 256).astype(int)
+        self.add_noise_to_z_obj = add_noise_to_z_obj
+        self.feat_dims = [embed_dim, spatial_dim, spatial_dim]
+        
+        self.z_channels = ddconfig["z_channels"]
+        # enc_feat_dims = self._get_enc_feat_dims(ddconfig)
+        
+        pose_encoder_config["params"]["num_channels"] = ddconfig["z_channels"]
+        pose_decoder_config["params"]["num_channels"] = ddconfig["z_channels"]
+        
+        # Pose prediction and latent
+        self.pose_decoder = instantiate_from_config(pose_decoder_config)
+        self.pose_encoder = instantiate_from_config(pose_encoder_config)
+        
+        # Decoder Setup
+        assert ~(apply_convolutional_shift_img_space and apply_convolutional_shift_latent_space), "Only one of the shift types (image or latent space) can be applied"
+        self.apply_conv_shift_img_space = apply_convolutional_shift_img_space
+        self.apply_conv_shift_latent_space = apply_convolutional_shift_latent_space
         self.decoder = AdaptiveFeatDecoder(**ddconfig)
+        
+        # Dropout Setup
+        self.dropout_prob_final = dropout_prob_final # 0.7
+        self.dropout_prob_init = dropout_prob_init # 1.0
+        self.dropout_prob = self.dropout_prob_init
+        self.dropout_warmup_steps = dropout_warmup_steps # 10000 (after stage 1: encoder pretraining)
+        self.pose_conditioned_generation_steps = pose_conditioned_generation_steps # 10000
+        self.intermediate_img_feature_leak_steps = intermediate_img_feature_leak_steps
+
+        # Loss setup
+        lossconfig["params"]["pose_conditioned_generation_steps"] = pose_conditioned_generation_steps
+        lossconfig["params"]["train_on_yaw"] = self.train_on_yaw
+        if not quantize_obj and not quantize_pose:
+            lossconfig["params"]["codebook_weight"] = 0.0
+        self.loss = instantiate_from_config(lossconfig)
+        self.num_classes = lossconfig["params"]["num_classes"]
+        
+        if colorize_nlabels is not None:
+            assert type(colorize_nlabels)==int
+            self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
+        if monitor is not None:
+            self.monitor = monitor
+            
+        self.perturb_rad_warmup_steps = perturb_rad_warmup_steps
+        
+        # Checkpointing
+        self.use_ema = ema_decay is not None
+        if self.use_ema:
+            self.ema_decay = ema_decay
+            assert 0. < ema_decay < 1.
+            self.model_ema = LitEma(self, decay=ema_decay)
+            print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
+        
+        if ckpt_path is not None:
+            try:
+                self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
+            except Exception as e:
+                # add optimizer to ignore_keys list
+                ignore_keys = ignore_keys + ["optimizer"]
+                self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
+
+        self.iter_counter = 0
+
+        ### Placeholders
+        self.patch_center_rad = None
+        self.patch_center_rad_init = None
+        
         assert not self.apply_conv_shift_img_space, "Not supporting shift in image space for adaptive pose autoencoder"
         assert not self.apply_conv_shift_latent_space, "Not supporting shift in latent space for adaptive pose autoencoder"
     

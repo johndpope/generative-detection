@@ -199,80 +199,33 @@ class NuScenesBase(MMDetNuScenesDataset):
         z_crop = self.compute_z_from_fixed_xy(x_crop, y_crop, obj_dist_crop)
 
         return z_crop
-
-    def recrop_patch(self, H, W, H_crop, W_crop, original_crop):
-        # recrop original_crop with H_crop height
-        # Calculate the center of the original crop
-        center_y = H // 2
-        center_x = W // 2
-
-        # Calculate the start and end indices for the new crop
-        start_y = center_y - H_crop // 2
-        end_y = start_y + H_crop
-
-        start_x = center_x - W_crop // 2
-        end_x = start_x + W_crop
-
-        start_y = int(max(0, start_y))
-        end_y = int(min(H, end_y))
-
-        start_x = int(max(0, start_x))
-        end_x = int(min(W, end_x))
-
-        # Recrop the original_crop with H_crop height
-        # original_crop.shape = 3, 256, 256
-        original_crop_recropped = original_crop[:, start_x:end_x, start_y:end_y]
-
-        return original_crop_recropped
     
-    def resample_tensor_img(self, image, target_height, target_width, mode='bilinear'):
-
-        # Add a batch dimension (N=1) since F.interpolate expects a 4D tensor
-        image = image.unsqueeze(0) if len(image.shape) != 4 else image
-
-        # Perform the bilinear resampling
-        resampled_image = F.interpolate(image, size=(target_height, target_width), mode=mode, align_corners=False)
-
-        # Remove the batch dimension
-        resampled_image = resampled_image.squeeze(0) 
-
-        return resampled_image
-
-
-    def get_perturbed_depth_crop(self, original_crop, x, y, z, fill_factor):
-        # sample H_crop to be max_perturb percent less or more than H
-        # object 100 by 100 (height 80, fill fac 20/100 = 0.2)
-        # multiplier based 
-        # fill factor - defines how much obj in image - use to define how much we need to crop
-        # param that needs to change - fill factor, and z?
-        # TODO: max and min should be defined by the next best anchor
-        # value that stays same - size of obj (l, h, w) of bbox
-        # if x and y not center doesnt remain the same. - could use zoom factor/multiplier
-        # 0.5 orginal - zoom fac 2 - new x = 1
-
-        # box size same, x and y in cam space is the same... 
-        # changing values - z in cam/patch NDC space, fill factor
-        # TODO: current case, x and y are in the center - 
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor):
+        x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
 
         max_zoom_mult = max(max(x, y), 0.75)
         min_zoom_mult = 1.0
         multiplier = np.random.uniform(low=max_zoom_mult, high=min_zoom_mult)
 
-        x_crop = x * multiplier
-        y_crop = y * multiplier
+        x_crop = x / multiplier
+        y_crop = y / multiplier
         H_crop = H * multiplier
         W_crop = H_crop * self.patch_aspect_ratio
-        H_crop = max(1, H_crop)
+        # H_crop = max(1, H_crop) # TODO: make sure what this is, where is this from?
 
         z_crop = self.compute_z_crop(H, H_crop, x, y, z, x_crop, y_crop, multiplier)
-        fill_factor_cropped = fill_factor * multiplier # TODO: is this correct?
-        original_crop_recropped = self.recrop_patch(H, W, H_crop, W_crop, original_crop)    
-
-        # to match encoder expected input shape
-        original_crop_recropped_resized = self.resample_tensor_img(original_crop_recropped, self.patch_size_return[0], self.patch_size_return[1])
+        fill_factor_cropped = fill_factor * multiplier 
+        center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
+        original_crop_recropped = center_cropper(original_crop) 
+        resizer = T.Resize(size=(self.patch_size_return[0], self.patch_size_return[1]),interpolation=T.InterpolationMode.BILINEAR)
+        original_crop_recropped_resized = resizer(original_crop_recropped)
         
-        return z_crop, original_crop_recropped_resized, fill_factor_cropped
+        pose_6d[:, 0] = x_crop
+        pose_6d[:, 1] = y_crop
+        pose_6d[:, 2] = z_crop
+
+        return pose_6d, original_crop_recropped_resized, fill_factor_cropped
         
     def _get_pose_6d_lhw(self, camera, cam_instance):
         
@@ -471,12 +424,8 @@ class NuScenesBase(MMDetNuScenesDataset):
         if debug_patch_img is not None and self.DEBUG:
             cam_instance.patch = T.ToTensor()(debug_patch_img)
 
-        # TODO: z crop perturb here.
         if self.perturb_z:
-            x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
-            z_crop, patch, fill_factor = self.get_perturbed_depth_crop(patch, x, y, z, fill_factor)
-            pose_6d[:, 2] = z_crop
-
+            pose_6d, patch, fill_factor = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor)
             cam_instance.update({'patch': patch,
                                  'fill_factor': fill_factor})
         
