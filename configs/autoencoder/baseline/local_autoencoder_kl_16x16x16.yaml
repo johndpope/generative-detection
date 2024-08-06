@@ -23,6 +23,7 @@ model:
     pose_conditioned_generation_steps: 0
     dropout_warmup_steps: 0
     train_on_yaw: True
+    decoder_mid_adaptive: False
     lossconfig:
       target: src.modules.losses.PoseLoss
       params:

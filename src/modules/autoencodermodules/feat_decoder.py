@@ -40,7 +40,9 @@ class AdaptiveFeatDecoder(nn.Module):
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
                  attn_type="vanilla", pose_embedding_layers=1, 
-                 pose_embedding_map_hidden_dim=512, pe_num_frequencies=6, **ignorekwargs):
+                 pose_embedding_map_hidden_dim=512, pe_num_frequencies=6, 
+                 mid_adaptive=True,
+                 **ignorekwargs):
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -60,6 +62,8 @@ class AdaptiveFeatDecoder(nn.Module):
         print("Working with z of shape {} = {} dimensions.".format(
             self.z_shape, np.prod(self.z_shape)))
 
+        self.mid_adaptive=mid_adaptive
+
         # z to block_in
         self.conv_in = AdpativeConv2dLayer(z_channels, # 16
                                             block_in,
@@ -71,17 +75,31 @@ class AdaptiveFeatDecoder(nn.Module):
 
         # middle
         self.mid = nn.Module()
-        self.mid.block_1 = AdaptiveResnetBlock(in_channels=block_in,
+        if self.mid_adaptive:
+            self.mid.block_1 = AdaptiveResnetBlock(in_channels=block_in,
                                         resolution=curr_res,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
                                        dropout=dropout)
+        else:
+            self.mid.block_1 = ResnetBlock(in_channels=block_in,
+                                       out_channels=block_in,
+                                       temb_channels=self.temb_ch,
+                                       dropout=dropout)
+
         self.mid.attn_1 = make_attn(block_in, attn_type=attn_type)
-        self.mid.block_2 = AdaptiveResnetBlock(in_channels=block_in,
-                                        resolution=curr_res,
-                                       out_channels=block_in,
-                                       temb_channels=self.temb_ch,
-                                       dropout=dropout)
+
+        if self.mid_adaptive:
+            self.mid.block_2 = AdaptiveResnetBlock(in_channels=block_in,
+                                            resolution=curr_res,
+                                        out_channels=block_in,
+                                        temb_channels=self.temb_ch,
+                                        dropout=dropout)
+        else:
+            self.mid.block_2 = ResnetBlock(in_channels=block_in,
+                                        out_channels=block_in,
+                                        temb_channels=self.temb_ch,
+                                        dropout=dropout)
 
         # upsampling
         self.up = nn.ModuleList()
@@ -113,15 +131,7 @@ class AdaptiveFeatDecoder(nn.Module):
                                         kernel_size=3,
                                         stride=1,
                                         padding=1)
-
-        # self.conv_out = AdpativeConv2dLayer(block_in,
-        #                                 out_ch,
-        #                                 w_dim=w_dim,
-        #                                 resolution=curr_res,
-        #                                 kernel_size=3,)
-        #                                 stride=1,
-        #                                 padding=1)
-
+                                        
         # add PositionalEncoding with k channels
         self.pose_pe = PositionalEncoding(num_channels=pose_dim, num_frequencies=pe_num_frequencies)
 
@@ -160,9 +170,13 @@ class AdaptiveFeatDecoder(nn.Module):
 
 
         # middle
-        h = self.mid.block_1(h, w, temb) # torch.Size([4, 512, 16, 16])
+        h = self.mid.block_1(h, w, temb) if self.mid_adaptive else self.mid.block_1(h, temb)
+        # torch.Size([4, 512, 16, 16])
+        
         h = self.mid.attn_1(h)# torch.Size([4, 512, 16, 16])
-        h = self.mid.block_2(h, w, temb) # torch.Size([4, 512, 16, 16])
+        
+        h = self.mid.block_2(h, w, temb) if self.mid_adaptive else self.mid.block_2(h, temb) 
+        # torch.Size([4, 512, 16, 16])
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
@@ -233,6 +247,7 @@ class AdaptiveResnetBlock(nn.Module):
                                                     # padding=0)
 
     def forward(self, x, w, temb):
+        
         h = x
         h = self.norm1(h)
         h = nonlinearity(h)

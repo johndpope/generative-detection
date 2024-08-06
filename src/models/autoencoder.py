@@ -127,7 +127,6 @@ class PoseAutoencoder(AutoencoderKL):
         self.feat_dims = [embed_dim, spatial_dim, spatial_dim]
         
         self.z_channels = ddconfig["z_channels"]
-        # enc_feat_dims = self._get_enc_feat_dims(ddconfig)
         
         pose_encoder_config["params"]["num_channels"] = ddconfig["z_channels"]
         pose_decoder_config["params"]["num_channels"] = ddconfig["z_channels"]
@@ -919,6 +918,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                  quantconfig=None,
                  quantize_obj=False,
                  quantize_pose=False,
+                 decoder_mid_adaptive=True,
                  **kwargs
                  ):
         pl.LightningModule.__init__(self)
@@ -985,7 +985,10 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         assert ~(apply_convolutional_shift_img_space and apply_convolutional_shift_latent_space), "Only one of the shift types (image or latent space) can be applied"
         self.apply_conv_shift_img_space = apply_convolutional_shift_img_space
         self.apply_conv_shift_latent_space = apply_convolutional_shift_latent_space
-        self.decoder = AdaptiveFeatDecoder(**ddconfig)
+
+        decoder_cfg = ddconfig.copy()
+        decoder_cfg["mid_adaptive"] = decoder_mid_adaptive
+        self.decoder = AdaptiveFeatDecoder(**decoder_cfg)
         
         # Dropout Setup
         self.dropout_prob_final = dropout_prob_final # 0.7
