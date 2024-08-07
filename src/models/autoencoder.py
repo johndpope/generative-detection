@@ -631,7 +631,7 @@ class PoseAutoencoder(AutoencoderKL):
                                         q_loss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
 
         self.log("val/rec_loss", log_dict_ae["val/rec_loss"], sync_dist=True)
-        del log_dict_ae["val/rec_loss"]
+        # del log_dict_ae["val/rec_loss"]
         self.log_dict(log_dict_ae)
         self.log_dict(log_dict_disc)
         return self.log_dict
@@ -859,6 +859,9 @@ class PoseAutoencoder(AutoencoderKL):
         
         log["inputs_rgb_in"] = rgb_in_viz.clone().detach()
         log["inputs_rgb_gt"] = rgb_gt_viz.clone().detach()
+        mask_2d_bbox = mask_2d_bbox.to(rgb_gt_viz.device)
+        rgb_gt_viz_in_mask = rgb_gt_viz * mask_2d_bbox
+        log["rgb_gt_viz_in_mask"] = rgb_gt_viz_in_mask
 
         if not only_inputs:
             log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="")
@@ -967,7 +970,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         self.encoder_pretrain_steps = lossconfig["params"]["encoder_pretrain_steps"]
         
         # Object latent
-        spatial_dim = (np.array([1/k for k in ddconfig["ch_mult"]]).prod()  * 256).astype(int)
+        spatial_dim = (np.array([1/k for k in ddconfig["ch_mult"]]).prod() * 256).astype(int)
         self.add_noise_to_z_obj = add_noise_to_z_obj
         self.feat_dims = [embed_dim, spatial_dim, spatial_dim]
         

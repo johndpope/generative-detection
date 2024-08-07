@@ -133,7 +133,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         if use_pixel_loss:
             # Compute pixelwise reconstruction only inside 2d bbox
             #TODO: ADD mask_2d_bbox back 
-            rec_loss = (rgb_inputs.contiguous() - rgb_reconstructions.contiguous()) # * mask_2d_bbox # torch.Size([4, 3, 256, 256])
+            rec_loss = (rgb_inputs.contiguous() - rgb_reconstructions.contiguous()) * mask_2d_bbox # torch.Size([4, 3, 256, 256])
             rec_loss = torch.abs(rec_loss)
         else:
             rec_loss = torch.zeros_like(rgb_inputs.contiguous())

@@ -219,7 +219,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask):
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
 
@@ -248,7 +248,10 @@ class NuScenesBase(MMDetNuScenesDataset):
         pose_6d[:, 1] = y_crop
         pose_6d[:, 2] = z_crop
 
-        return pose_6d, original_crop_recropped_resized, fill_factor_cropped
+        original_mask_zoomed = center_cropper(original_mask) 
+        original_mask_zoomed_resized = resizer(original_mask_zoomed)
+        
+        return pose_6d, original_crop_recropped_resized, fill_factor_cropped, original_mask_zoomed_resized
         
     def _get_pose_6d_lhw(self, camera, cam_instance):
         
@@ -446,13 +449,15 @@ class NuScenesBase(MMDetNuScenesDataset):
             cam_instance.patch = T.ToTensor()(debug_patch_img)
 
         if self.perturb_z:
-            pose_6d_new, patch_new, fill_factor_new = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original)
+            pose_6d_new, patch_new, fill_factor_new, mask_2d_bbox_new = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original, mask_2d_bbox)
             pose_6d = pose_6d_new.reshape_as(pose_6d)
             patch = patch_new.reshape_as(patch)
+            mask_2d_bbox = mask_2d_bbox_new.reshape_as(mask_2d_bbox)
             fill_factor = float(fill_factor_new)
             
             cam_instance.update({'patch': patch,
-                                 'fill_factor': fill_factor})
+                                 'fill_factor': fill_factor,
+                                 'mask_2d_bbox':mask_2d_bbox})
         
         cam_instance.pose_6d, cam_instance.bbox_sizes, cam_instance.yaw = pose_6d, bbox_sizes, yaw
 
