@@ -189,11 +189,11 @@ class NuScenesBase(MMDetNuScenesDataset):
     def compute_z_crop(self, H, H_crop, x, y, z, x_crop, y_crop, multiplier, eps=1e-8):
         
         obj_dist_sq = x**2 + y**2 + z**2
-        obj_dist = torch.tensor(math.sqrt(obj_dist_sq + eps))
-        
+        obj_dist = torch.tensor(math.sqrt(obj_dist_sq + eps)).squeeze()
+        multiplier = torch.tensor(multiplier)
         obj_dist_crop = torch.tensor(obj_dist / multiplier)
-        z_crop = torch.tensor(math.sqrt((obj_dist_crop**2 - x**2 - y**2) + eps))
-
+        z_crop = torch.tensor(torch.sqrt(torch.clamp(obj_dist_crop**2 - x**2 - y**2, min=0.0) + eps))
+        z_crop = z_crop.reshape_as(z)
         return z_crop
 
     def get_min_max_multipliers(self, patch_size_original):
@@ -446,7 +446,11 @@ class NuScenesBase(MMDetNuScenesDataset):
             cam_instance.patch = T.ToTensor()(debug_patch_img)
 
         if self.perturb_z:
-            pose_6d, patch, fill_factor = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original)
+            pose_6d_new, patch_new, fill_factor_new = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original)
+            pose_6d = pose_6d_new.reshape_as(pose_6d)
+            patch = patch_new.reshape_as(patch)
+            fill_factor = float(fill_factor_new)
+            
             cam_instance.update({'patch': patch,
                                  'fill_factor': fill_factor})
         
