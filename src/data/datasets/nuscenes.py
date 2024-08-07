@@ -39,10 +39,10 @@ PATCH_ANCHOR_SIZES = [50, 100, 200, 400]
 
 class NuScenesBase(MMDetNuScenesDataset):
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
-                 is_sweep=False, perturb_center=False, perturb_scale=False, 
+                 is_sweep=False, perturb_center=True, perturb_scale=False, 
                  negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
                  perturb_prob=0.0, patch_center_rad_init=0.5, 
-                 perturb_yaw=False, perturb_z=False, 
+                 perturb_yaw=False, allow_zoomout=False,
                  **kwargs):
         # Setup directory
         self.data_root = data_root
@@ -50,6 +50,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         super().__init__(data_root=data_root, **kwargs)
         # Setup class labels and ids
         self.label_names = label_names
+        self.allow_zoomout = allow_zoomout
         self.label_ids = [LABEL_NAME2ID[label_name] for label_name in LABEL_NAME2ID.keys() if label_name in label_names]
         logging.info(f"Using label names: {self.label_names}, label ids: {self.label_ids}")
         # Setup patch
@@ -57,7 +58,6 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.patch_size_return = (patch_height, int(patch_height * patch_aspect_ratio)) # aspect ratio is width/height
         # Setup patch shifts and scale
         self.shift_center = perturb_center if self.split != "test" else False
-        self.perturb_scale = perturb_scale if self.split != "test" else False
         # Define mapping from nuscenes label ids to our label ids depending on num of classes we predict
         self.label_id2class_id = {label : i for i, label in enumerate(self.label_ids)}  
         self.class_id2label_id = {v: k for k, v in self.label_id2class_id.items()}
@@ -71,7 +71,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         # Set sampling probability for negative samples
         self.negative_sample_prob = negative_sample_prob if "background" in self.label_names else 0.0
         self.perturb_yaw = perturb_yaw
-        self.perturb_z = perturb_z
+        self.perturb_z = perturb_scale if self.split != "test" else False
         self.DEBUG = False
         self.perturb_prob = perturb_prob
         self.patch_center_rad_init = torch.tensor(patch_center_rad_init)
@@ -186,33 +186,56 @@ class NuScenesBase(MMDetNuScenesDataset):
          
         return patch_resized_tensor, patch_center_2d, patch_size_anchor, resampling_factor, padding_pixels_resampled, mask
      
-    def compute_z_from_fixed_xy(self, x, y, obj_dist, eps=1e-8):
-        z_sq = obj_dist**2 - x**2 - y**2
-        return math.sqrt(z_sq + eps)
-
     def compute_z_crop(self, H, H_crop, x, y, z, x_crop, y_crop, multiplier, eps=1e-8):
-        # TODO: x and y need to be scaled by multiplier
-        obj_dist_sq = x**2 + y**2 + z**2
-        obj_dist = math.sqrt(obj_dist_sq + eps)
         
-        obj_dist_crop = obj_dist / multiplier
-        z_crop = self.compute_z_from_fixed_xy(x_crop, y_crop, obj_dist_crop)
+        obj_dist_sq = x**2 + y**2 + z**2
+        obj_dist = torch.tensor(math.sqrt(obj_dist_sq + eps))
+        
+        obj_dist_crop = torch.tensor(obj_dist / multiplier)
+        z_crop = torch.tensor(math.sqrt((obj_dist_crop**2 - x**2 - y**2) + eps))
 
         return z_crop
+
+    def get_min_max_multipliers(self, patch_size_original):
+        # Find the index of patch_size_original
+        patch_size_original = patch_size_original.max()
+        index = PATCH_ANCHOR_SIZES.index(patch_size_original)
+
+        # Determine the next smallest and next biggest sizes
+        next_smallest = PATCH_ANCHOR_SIZES[index - 1] if index > 0 else None
+        next_biggest = PATCH_ANCHOR_SIZES[index + 1] if index < len(PATCH_ANCHOR_SIZES) - 1 else None
+
+        # Determine the threshold values
+        lower_threshold = (patch_size_original + next_smallest) / 2 if next_smallest else patch_size_original
+        upper_threshold = (patch_size_original + next_biggest) / 2 if next_biggest else patch_size_original
+
+        # Function to find the multipliers
+        def find_multipliers(patch_size_original, lower_threshold, upper_threshold):
+            m_min = lower_threshold / patch_size_original
+            m_max = upper_threshold / patch_size_original
+            return m_min, m_max
+
+        m_min, m_max = find_multipliers(patch_size_original, lower_threshold, upper_threshold)
+        
+        return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original):
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
 
-        max_zoom_mult = max(max(x, y), 0.75)
-        min_zoom_mult = 1.0
+        m_min, m_max = self.get_min_max_multipliers(patch_size_original)
+        
+        max_zoom_mult = max(max(x, y), m_min) # since each anchor is 2x the previous
+        if self.allow_zoomout:
+            min_zoom_mult = m_max # zero pad on zooming out... 
+        else:
+            min_zoom_mult = 1.0 # no zoomout
         multiplier = np.random.uniform(low=max_zoom_mult, high=min_zoom_mult)
 
         x_crop = x / multiplier
         y_crop = y / multiplier
         H_crop = H * multiplier
         W_crop = H_crop * self.patch_aspect_ratio
-        # H_crop = max(1, H_crop) # TODO: make sure what this is, where is this from?
 
         z_crop = self.compute_z_crop(H, H_crop, x, y, z, x_crop, y_crop, multiplier)
         fill_factor_cropped = fill_factor * multiplier 
@@ -229,7 +252,6 @@ class NuScenesBase(MMDetNuScenesDataset):
         
     def _get_pose_6d_lhw(self, camera, cam_instance):
         
-        # fill_factor = padding_pixels_resampled /self.patch_size_return[0]
         padding_pixels_resampled = cam_instance.fill_factor * self.patch_size_return[0]
         x, y, z, l, h, w, yaw = cam_instance.bbox_3d # in camera coordinate system? need to convert to patch NDC
         roll, pitch = 0.0, 0.0 # roll and pitch are 0 for all instances in nuscenes dataset
@@ -264,7 +286,6 @@ class NuScenesBase(MMDetNuScenesDataset):
         else:
             debug_patch_img = None
         
-        # TODO: scale z values from camera to learned
         z_world = z
         
         def get_zminmax(min_val, max_val, focal_length, patch_height):
@@ -425,7 +446,7 @@ class NuScenesBase(MMDetNuScenesDataset):
             cam_instance.patch = T.ToTensor()(debug_patch_img)
 
         if self.perturb_z:
-            pose_6d, patch, fill_factor = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor)
+            pose_6d, patch, fill_factor = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original)
             cam_instance.update({'patch': patch,
                                  'fill_factor': fill_factor})
         

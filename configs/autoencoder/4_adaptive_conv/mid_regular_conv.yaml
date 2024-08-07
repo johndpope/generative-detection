@@ -2,6 +2,8 @@ model:
   base_learning_rate: 4.5e-6
   target: src.models.autoencoder.AdaptivePoseAutoencoder
   params:
+    apply_convolutional_shift_img_space: False
+    apply_convolutional_shift_latent_space: False
     monitor: "val/rec_loss"
     embed_dim: 16
     euler_convention: "XYZ"
@@ -10,8 +12,8 @@ model:
     dropout_prob_final: 0.0
     pose_conditioned_generation_steps: 0
     dropout_warmup_steps: 0
-    add_noise_to_z_obj: True
     train_on_yaw: True
+    decoder_mid_adaptive: False
     lossconfig:
       target: src.modules.losses.PoseLoss
       params:
@@ -56,7 +58,7 @@ model:
     ddconfig:
       double_z: True
       z_channels: 16
-      resolution: 64
+      resolution: 256
       in_channels: 3
       out_ch: 3
       ch: 128
@@ -91,8 +93,10 @@ data:
         patch_height: 256
         patch_aspect_ratio: 1.0
         perturb_center: True
-        perturb_scale: True
+        perturb_scale: False
         perturb_prob: 1.0
+        allow_zoomout: False
+        
     validation:
       target: src.data.datasets.nuscenes.NuScenesValidation
       params:
@@ -110,9 +114,10 @@ data:
         label_names: ['car', 'truck', 'trailer', 'bus', 'construction_vehicle']
         patch_height: 256
         patch_aspect_ratio: 1.0
-        perturb_center: True
-        perturb_scale: True
+        perturb_center: False
+        perturb_scale: False
         perturb_prob: 0.0
+        allow_zoomout: False
     test:
       target: src.data.datasets.nuscenes.NuScenesTest
       params:
@@ -133,6 +138,7 @@ data:
         perturb_center: False
         perturb_scale: False
         perturb_prob: 0.0
+        allow_zoomout: False
 
 lightning:
   callbacks:
@@ -142,7 +148,7 @@ lightning:
         batch_frequency: 5000
         max_images: 1
         increase_log_steps: True
-        disable_local_logging: False
+        disable_local_logging: True
 
     progress_bar:
       target: src.util.callbacks.TQDMProgressBar
@@ -156,7 +162,7 @@ lightning:
   trainer:
     accumulate_grad_batches: 1
     accelerator: gpu
-    max_epochs: 1000
+    max_epochs: 50
     strategy: ddp
     detect_anomaly: True
     precision: 32

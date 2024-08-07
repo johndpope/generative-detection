@@ -238,13 +238,14 @@ class AdaptiveResnetBlock(nn.Module):
                                                     #  stride=1,
                                                     #  padding=1)
             else: # TODO: shouldnt go here... so self.use_conv_shortcut must be True
-                self.nin_shortcut = AdpativeConv2dLayer(in_channels,
+                assert self.use_conv_shortcut, "self.use_conv_shortcut must be True, but is set to False here."
+                self.nin_shortcut = torch.nn.Conv2d(in_channels,
                                                     out_channels,
-                                                    w_dim=w_dim,
-                                                    resolution=resolution,
-                                                    kernel_size=1,)
-                                                    # stride=1,
-                                                    # padding=0)
+                                                    # w_dim=w_dim,
+                                                    # resolution=resolution,
+                                                    kernel_size=1,#)
+                                                    stride=1,
+                                                    padding=0)
 
     def forward(self, x, w, temb):
         
