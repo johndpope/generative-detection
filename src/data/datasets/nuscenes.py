@@ -355,7 +355,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return pose_6d_no_v1v2, bbox_sizes, yaw, debug_patch_img
     
-    def _get_shifted_patch_center(self, center_2d, bbox):
+    def _get_shifted_patch_center(self, center_2d, bbox, p=0.8):
         x1, y1, x2, y2 = bbox
         center_x, center_y = center_2d
 
@@ -369,11 +369,24 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         # Random perturbation in x direction within the max perturbation limit
         r_max_shift = r_max_shift.clone().detach().cpu().numpy()
-        x_shifted = np.random.uniform(-r_max_shift, r_max_shift)
+
+        # Randomly decide between uniform or Gaussian shift based on probability p
+        if np.random.rand() < p:
+            # Uniform distribution for shift
+            x_shifted = np.random.uniform(-r_max_shift, r_max_shift)
         
-        # Calculate corresponding y perturbation to maintain visibility condition
-        max_y_shift = np.sqrt(r_max_shift**2 - x_shifted**2)
-        y_shifted = np.random.uniform(-max_y_shift, max_y_shift)
+            # Calculate corresponding y perturbation to maintain visibility condition
+            max_y_shift = np.sqrt(r_max_shift**2 - x_shifted**2)
+            y_shifted = np.random.uniform(-max_y_shift, max_y_shift)
+        else:
+            # Gaussian distribution for shift (close to 0)
+            x_shifted = np.random.normal(loc=0, scale=r_max_shift / 4)
+            x_shifted = np.clip(x_shifted, -r_max_shift, r_max_shift)
+            
+            # Calculate corresponding y perturbation to maintain visibility condition
+            max_y_shift = np.sqrt(r_max_shift**2 - x_shifted**2)
+            y_shifted = np.random.normal(loc=0, scale=max_y_shift / 4)
+            y_shifted = np.clip(y_shifted, -max_y_shift, max_y_shift)
         
         # Perturbed center coordinates
         shifted_center_x = int(center_x + x_shifted)

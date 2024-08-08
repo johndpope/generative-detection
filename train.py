@@ -233,7 +233,9 @@ def get_model_checkpoint_cfgs(ckptdir, model, lightning_config):
                 "filename": "{epoch:06}",
                 "verbose": True,
                 "save_last": True,
-                'save_weights_only': True
+                "auto_insert_metric_name":True,
+                'save_weights_only': False,
+                "save_on_train_epoch_end": True,
             }
         }
     if hasattr(model, "monitor"):
