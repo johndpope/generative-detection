@@ -189,10 +189,10 @@ class NuScenesBase(MMDetNuScenesDataset):
     def compute_z_crop(self, H, H_crop, x, y, z, x_crop, y_crop, multiplier, eps=1e-8):
         
         obj_dist_sq = x**2 + y**2 + z**2
-        obj_dist = torch.tensor(math.sqrt(obj_dist_sq + eps)).squeeze()
+        obj_dist = torch.sqrt(obj_dist_sq + eps).squeeze()
         multiplier = torch.tensor(multiplier)
-        obj_dist_crop = torch.tensor(obj_dist / multiplier)
-        z_crop = torch.tensor(torch.sqrt(torch.clamp(obj_dist_crop**2 - x**2 - y**2, min=0.0) + eps))
+        obj_dist_crop = obj_dist / multiplier
+        z_crop = torch.sqrt(torch.clamp((obj_dist_crop**2 - x**2 - y**2) + eps, min=0.0) + eps)
         z_crop = z_crop.reshape_as(z)
         return z_crop
 
@@ -355,7 +355,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return pose_6d_no_v1v2, bbox_sizes, yaw, debug_patch_img
     
-    def _get_shifted_patch_center(self, center_2d, bbox, p=0.8):
+    def _get_shifted_patch_center(self, center_2d, bbox, p=0.8, eps=1e-8):
         x1, y1, x2, y2 = bbox
         center_x, center_y = center_2d
 
@@ -376,20 +376,22 @@ class NuScenesBase(MMDetNuScenesDataset):
             x_shifted = np.random.uniform(-r_max_shift, r_max_shift)
         
             # Calculate corresponding y perturbation to maintain visibility condition
-            max_y_shift = np.sqrt(r_max_shift**2 - x_shifted**2)
+            max_y_shift = np.sqrt((r_max_shift**2 - x_shifted**2) + eps)
             y_shifted = np.random.uniform(-max_y_shift, max_y_shift)
         else:
             # Gaussian distribution for shift (close to 0)
             x_shifted = np.random.normal(loc=0, scale=r_max_shift / 4)
-            x_shifted = np.clip(x_shifted, -r_max_shift, r_max_shift)
             
             # Calculate corresponding y perturbation to maintain visibility condition
-            max_y_shift = np.sqrt(r_max_shift**2 - x_shifted**2)
+            max_y_shift = np.sqrt((r_max_shift**2 - x_shifted**2) + eps)
             y_shifted = np.random.normal(loc=0, scale=max_y_shift / 4)
-            y_shifted = np.clip(y_shifted, -max_y_shift, max_y_shift)
         
         # Perturbed center coordinates
+        assert not math.isnan(center_x)
+        x_shifted = 0.0 if math.isnan(x_shifted) else x_shifted
         shifted_center_x = int(center_x + x_shifted)
+        assert not math.isnan(center_y)
+        y_shifted = 0.0 if math.isnan(y_shifted) else y_shifted
         shifted_center_y = int(center_y + y_shifted)
         
         return [shifted_center_x, shifted_center_y]
