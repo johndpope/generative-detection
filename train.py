@@ -446,7 +446,7 @@ def main():
 
         # model
         model = instantiate_from_config(config.model)
-
+        
         # trainer and callbacks
         trainer_kwargs = dict()
 
@@ -473,7 +473,7 @@ def main():
 
         # configure learning rate
         model = configure_learning_rate(config, model, lightning_config, cpu, opt)
-
+        # model.configure_optimizers()
         # TODO: Make optional 
         if False:
             model.patch_center_rad = data.datasets['train'].data.patch_center_rad

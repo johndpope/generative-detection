@@ -729,7 +729,7 @@ class PoseAutoencoder(AutoencoderKL):
     
     def return_empty(self, global_patch_index, z_obj, dec_pose, score, class_idx):
         return torch.empty_like(global_patch_index[:0]), torch.empty_like(z_obj[:0]), torch.empty_like(dec_pose[:0]), torch.empty_like(score[:0]), torch.empty_like(class_idx[:0])
-  
+
     @torch.enable_grad()
     def _refinement_step(self, input_patches, z_obj, z_pose):
         # Initialize optimizer and parameters
@@ -775,6 +775,10 @@ class PoseAutoencoder(AutoencoderKL):
                                   lr=lr, betas=(0.5, 0.9))
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
+
+        # if False: # TODO: make optional
+        #     opt_ae.param_groups[0]['capturable'] = True
+        #     opt_disc.param_groups[0]['capturable'] = True
         return [opt_ae, opt_disc], []
     
     def _perturb_poses(self, batch, dec_pose):

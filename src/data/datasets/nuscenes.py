@@ -77,7 +77,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         self.patch_center_rad_init = torch.tensor(patch_center_rad_init)
         self.patch_center_rad = self.patch_center_rad_init # default 0.5
         assert not self.patch_center_rad.is_cuda, "self.patch_center_rad.device must be on cpu"
-        
+        self.count = 0
     def __len__(self):
         self.num_samples = super().__len__()
         self.num_cameras = len(CAMERA_NAMES)
@@ -189,10 +189,10 @@ class NuScenesBase(MMDetNuScenesDataset):
     def compute_z_crop(self, H, H_crop, x, y, z, x_crop, y_crop, multiplier, eps=1e-8):
         
         obj_dist_sq = x**2 + y**2 + z**2
-        obj_dist = torch.sqrt(obj_dist_sq + eps).squeeze()
+        obj_dist = torch.sqrt(abs(obj_dist_sq + eps)).squeeze()
         multiplier = torch.tensor(multiplier)
         obj_dist_crop = obj_dist / multiplier
-        z_crop = torch.sqrt(torch.clamp((obj_dist_crop**2 - x**2 - y**2) + eps, min=0.0) + eps)
+        z_crop = torch.sqrt(torch.clamp((obj_dist_crop**2 - x**2 - y**2), min=0.0) + eps)
         z_crop = z_crop.reshape_as(z)
         return z_crop
 
@@ -219,7 +219,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.3):
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
 
@@ -230,7 +230,15 @@ class NuScenesBase(MMDetNuScenesDataset):
             min_zoom_mult = m_max # zero pad on zooming out... 
         else:
             min_zoom_mult = 1.0 # no zoomout
-        multiplier = np.random.uniform(low=max_zoom_mult, high=min_zoom_mult)
+
+        if np.random.rand() < p:
+            # Sample from a uniform distribution
+            multiplier = np.random.uniform(low=max_zoom_mult, high=min_zoom_mult)
+        else:
+            # Sample from a Gaussian distribution
+            mean = 1.0
+            std_dev = (min_zoom_mult - max_zoom_mult) / 6.0  # std_dev such that 99.7% values are within the range
+            multiplier = np.random.normal(loc=mean, scale=std_dev)
 
         x_crop = x / multiplier
         y_crop = y / multiplier
@@ -376,14 +384,14 @@ class NuScenesBase(MMDetNuScenesDataset):
             x_shifted = np.random.uniform(-r_max_shift, r_max_shift)
         
             # Calculate corresponding y perturbation to maintain visibility condition
-            max_y_shift = np.sqrt((r_max_shift**2 - x_shifted**2) + eps)
+            max_y_shift = np.sqrt(abs(r_max_shift**2 - x_shifted**2) + eps)
             y_shifted = np.random.uniform(-max_y_shift, max_y_shift)
         else:
             # Gaussian distribution for shift (close to 0)
             x_shifted = np.random.normal(loc=0, scale=r_max_shift / 4)
             
             # Calculate corresponding y perturbation to maintain visibility condition
-            max_y_shift = np.sqrt((r_max_shift**2 - x_shifted**2) + eps)
+            max_y_shift = np.sqrt(abs(r_max_shift**2 - x_shifted**2) + eps)
             y_shifted = np.random.normal(loc=0, scale=max_y_shift / 4)
         
         # Perturbed center coordinates
@@ -658,7 +666,7 @@ class NuScenesBase(MMDetNuScenesDataset):
             value = ret[key]
             if isinstance(value, list) or isinstance(value, tuple):
                 ret[key] = torch.tensor(value, dtype=torch.float32)
-         
+        self.count += 1
         return ret
     
     def get_random_crop_without_overlap(self, img_pil, bbox_2d_list, patch_sizes):
