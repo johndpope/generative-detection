@@ -219,7 +219,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.3):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.5):
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
 
@@ -238,6 +238,7 @@ class NuScenesBase(MMDetNuScenesDataset):
             # Sample from a Gaussian distribution
             mean = 1.0
             std_dev = (min_zoom_mult - max_zoom_mult) / 6.0  # std_dev such that 99.7% values are within the range
+            std_dev = max(std_dev, 0.01)  # minimum std_dev is 0.01
             multiplier = np.random.normal(loc=mean, scale=std_dev)
 
         x_crop = x / multiplier
@@ -259,7 +260,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         original_mask_zoomed = center_cropper(original_mask) 
         original_mask_zoomed_resized = resizer(original_mask_zoomed)
         
-        return pose_6d, original_crop_recropped_resized, fill_factor_cropped, original_mask_zoomed_resized
+        return pose_6d, original_crop_recropped_resized, fill_factor_cropped, original_mask_zoomed_resized, multiplier
         
     def _get_pose_6d_lhw(self, camera, cam_instance):
         
@@ -470,9 +471,10 @@ class NuScenesBase(MMDetNuScenesDataset):
         pose_6d, bbox_sizes, yaw, debug_patch_img = self._get_pose_6d_lhw(camera, cam_instance)
         if debug_patch_img is not None and self.DEBUG:
             cam_instance.patch = T.ToTensor()(debug_patch_img)
-
+        
+        zoom_multiplier = 1.0
         if self.perturb_z:
-            pose_6d_new, patch_new, fill_factor_new, mask_2d_bbox_new = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original, mask_2d_bbox)
+            pose_6d_new, patch_new, fill_factor_new, mask_2d_bbox_new, zoom_multiplier = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original, mask_2d_bbox)
             pose_6d = pose_6d_new.reshape_as(pose_6d)
             patch = patch_new.reshape_as(patch)
             mask_2d_bbox = mask_2d_bbox_new.reshape_as(mask_2d_bbox)
@@ -481,6 +483,8 @@ class NuScenesBase(MMDetNuScenesDataset):
             cam_instance.update({'patch': patch,
                                  'fill_factor': fill_factor,
                                  'mask_2d_bbox':mask_2d_bbox})
+        
+        cam_instance.zoom_multiplier = torch.tensor(zoom_multiplier).squeeze()
         
         cam_instance.pose_6d, cam_instance.bbox_sizes, cam_instance.yaw = pose_6d, bbox_sizes, yaw
 
@@ -601,6 +605,8 @@ class NuScenesBase(MMDetNuScenesDataset):
                 return self.__get_new_item__(idx)
             ret.bbox_3d_gt = patch_obj.bbox_3d
             ret.update(patch_obj)
+
+            ret.zoom_multiplier = patch_obj.zoom_multiplier
             # get a second crop of the same object instance again
             # TODO: Make optional
             # only get second crop with probability perturb_prob, else copy first crop dict to second crop dict
@@ -613,6 +619,8 @@ class NuScenesBase(MMDetNuScenesDataset):
             ret.bbox_3d_gt_2 = patch_obj_2.bbox_3d
             if patch_obj is None or patch_obj_2 is None:
                 return self.__get_new_item__(idx)
+
+            ret.zoom_multiplier_2 = patch_obj_2.zoom_multiplier
 
             patch_center_2d = torch.tensor(patch_obj.center_2d).float()
             ret.patch_center_2d = patch_center_2d

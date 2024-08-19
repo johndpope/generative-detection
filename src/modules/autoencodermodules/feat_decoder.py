@@ -11,7 +11,7 @@ class FeatDecoder(LDMDecoder):
         super().__init__(**kwargs)
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, num_channels=13, num_frequencies=6):
+    def __init__(self, num_channels=13, num_frequencies=6): # TODO: class should not be an input here
         super(PositionalEncoding, self).__init__()
         self.num_channels = num_channels
         self.num_frequencies = num_frequencies

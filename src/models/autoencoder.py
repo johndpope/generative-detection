@@ -13,6 +13,7 @@ from torch.autograd import Variable
 from torch.distributions.normal import Normal
 from torchvision.ops import batched_nms, nms
 import pytorch_lightning as pl
+import torchvision.transforms as T
 
 from ldm.models.autoencoder import AutoencoderKL
 from ldm.util import instantiate_from_config
@@ -69,6 +70,8 @@ class PoseAutoencoder(AutoencoderKL):
                  add_noise_to_z_obj=False,
                  train_on_yaw=True,
                  ema_decay=0.999,
+                 apply_conv_crop_img_space=False,
+                 apply_conv_crop_latent_space=False,
                  apply_convolutional_shift_img_space=False,
                  apply_convolutional_shift_latent_space=False,
                  quantconfig=None,
@@ -139,6 +142,9 @@ class PoseAutoencoder(AutoencoderKL):
         assert ~(apply_convolutional_shift_img_space and apply_convolutional_shift_latent_space), "Only one of the shift types (image or latent space) can be applied"
         self.apply_conv_shift_img_space = apply_convolutional_shift_img_space
         self.apply_conv_shift_latent_space = apply_convolutional_shift_latent_space
+        self.apply_conv_crop_img_space = apply_conv_crop_img_space
+        self.apply_conv_crop_latent_space = apply_conv_crop_latent_space
+        assert not (self.apply_conv_crop_img_space and self.apply_conv_crop_latent_space), "Only one of the crop types (image or latent space) can be applied"
         self.decoder = FeatDecoder(**ddconfig)
         
         # Dropout Setup
@@ -522,6 +528,8 @@ class PoseAutoencoder(AutoencoderKL):
         class_gt = self.get_class_input(batch, self.class_key).to(self.device) # torch.Size([4])
         class_gt_label = batch["class_name"]
 
+        zoom_mult = batch["zoom_multiplier"]
+
             
         # torch.Size([4, 3, 256, 256]), torch.Size([4, 8]), torch.Size([4, 16, 16, 16]), torch.Size([4, 7])
         if "pose_6d_2" in batch:
@@ -544,10 +552,11 @@ class PoseAutoencoder(AutoencoderKL):
             # Replace Segmentation Mask
             segm_mask_gt = self.get_mask_input(batch, self.image_mask_key) # None
             segm_mask_gt = segm_mask_gt.to(self.device) if segm_mask_gt is not None else None
+            zoom_mult = batch["zoom_multiplier_2"]
         else:
             second_pose = None
             
-        return rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose
+        return rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult
     
     def _update_patch_center_rad(self):
         if self.iter_counter >= self.perturb_rad_warmup_steps:
@@ -564,11 +573,11 @@ class PoseAutoencoder(AutoencoderKL):
             self.log("perturb_rad", self.patch_center_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         # Get inputs in right shape
-        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult \
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True, zoom_mult=zoom_mult)
         
         self.log("dropout_prob", self.dropout_prob, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.iter_counter += 1
@@ -608,11 +617,11 @@ class PoseAutoencoder(AutoencoderKL):
     def validation_step(self, batch, batch_idx):
         
         # Get inputs in right shape
-        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult \
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True, zoom_mult=zoom_mult)
         
         _, log_dict_ae = self.loss(rgb_gt, segm_mask_gt, pose_gt,
                                       pred_obj, dec_pose,
@@ -788,12 +797,12 @@ class PoseAutoencoder(AutoencoderKL):
         assert pose_6d_perturbed_ret.shape == dec_pose.shape, f"pose_6d_perturbed_ret shape: {pose_6d_perturbed_ret.shape}"
         return pose_6d_perturbed_ret.to(self.device) # torch.Size([4, 8])
  
-    def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace):
+    def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace, zoom_mult):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
 
-        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=second_pose)
-        xrec, poserec, posterior_obj, bbox_posterior, q_loss, _, _ = self.forward(rgb_in, pose_gt)
+        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
+        xrec, poserec, posterior_obj, bbox_posterior, q_loss, _, _ = self.forward(rgb_in, pose_gt, zoom_mult=zoom_mult)
         
         xrec_rgb = xrec[:, :3, :, :] # torch.Size([8, 3, 64, 64])
         xrec_rgb_2 = xrec_2[:, :3, :, :] # torch.Size([8, 3, 64, 64])
@@ -839,7 +848,7 @@ class PoseAutoencoder(AutoencoderKL):
         for idx, snd_pose in enumerate(second_pose):
             # torch.Size([1, 4])
             snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
-            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=snd_pose)
+            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=snd_pose, zoom_mult=zoom_mult)
             xrec_rgb_2 = xrec_2[:, :3, :, :]    
 
             if rgb_in_viz.shape[1] > 3:
@@ -855,7 +864,7 @@ class PoseAutoencoder(AutoencoderKL):
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
 
-        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult \
             = self.get_all_inputs(batch)
         
         rgb_in_viz = self._rescale(rgb_in)
@@ -865,11 +874,11 @@ class PoseAutoencoder(AutoencoderKL):
         log["inputs_rgb_gt"] = rgb_gt_viz.clone().detach()
 
         if not only_inputs:
-            log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="")
+            log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="", zoom_mult=zoom_mult)
 
             # EMA weights visualization
             with self.ema_scope():
-                log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema")
+                log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema", zoom_mult=zoom_mult)
         return log
     
     def _rescale(self, x):
@@ -917,6 +926,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                  add_noise_to_z_obj=False,
                  train_on_yaw=True,
                  ema_decay=0.999,
+                 apply_conv_crop_img_space=False,
+                 apply_conv_crop_latent_space=False,
                  apply_convolutional_shift_img_space=False,
                  apply_convolutional_shift_latent_space=False,
                  quantconfig=None,
@@ -990,6 +1001,10 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         self.apply_conv_shift_img_space = apply_convolutional_shift_img_space
         self.apply_conv_shift_latent_space = apply_convolutional_shift_latent_space
 
+        self.apply_conv_crop_img_space = apply_conv_crop_img_space
+        self.apply_conv_crop_latent_space = apply_conv_crop_latent_space
+        assert not (self.apply_conv_crop_img_space and self.apply_conv_crop_latent_space), "Only one of the crop types (image or latent space) can be applied"
+
         decoder_cfg = ddconfig.copy()
         decoder_cfg["mid_adaptive"] = decoder_mid_adaptive
         self.decoder = AdaptiveFeatDecoder(**decoder_cfg)
@@ -1048,7 +1063,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         dec = self.decoder(z, pose)
         return dec
 
-    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, return_pred_indices=False):
+    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, return_pred_indices=False, zoom_mult=None):
         """
         Forward pass of the autoencoder model.
         
@@ -1063,6 +1078,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
         # apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
+        apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -1095,43 +1111,75 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         #     std_normal = Normal(0, 1)
         #     z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
         #     z_obj = z_obj + z_obj_noise
-            
-        # if not apply_manual_shift:
+        
         # Replace pose with other pose if supervised with other patch
         if second_pose is not None:
             gen_pose = second_pose.to(pred_pose)
         else:
             gen_pose = pred_pose
-        
-        # Run pose encoder layers  
-        z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
 
-        assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
-        
-        # Add object and pose latents
-        z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
-        # else:
-        #     z_obj_pose = z_obj
-        #     # Compute shift if shift between both patches
-        #     if second_pose is not None:
-        #         shift_x = second_pose[:, 0] - pose_gt[:, 0]
-        #         shift_y = second_pose[:, 1] - pose_gt[:, 1]
-        #         d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
-        #     else:
-        #         shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
-        #         d_shift = torch.tensor([0.0])
+        if not apply_manual_crop:
+
+            # Run pose encoder layers  
+            z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
+
+            assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
+            
+            # Add object and pose latents
+            z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
+        else:
+            z_obj_pose = z_obj
+            assert zoom_mult is not None, "zoom_mult is not specified, aka None"
+            # # Compute shift if shift between both patches
+            # if second_pose is not None:
+            #     shift_x = second_pose[:, 0] - pose_gt[:, 0]
+            #     shift_y = second_pose[:, 1] - pose_gt[:, 1]
+            #     d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
+            # else:
+            #     shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
+            #     d_shift = torch.tensor([0.0])
         
         # # Apply shift in latent space
         # if self.apply_conv_shift_latent_space and d_shift:
         #     z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
         
+        # Apply crop in latent space
+        if self.apply_conv_crop_latent_space:
+            z_obj_pose = self.manual_crop(z_obj_pose, zoom_mult)
+
         # Predict images from object and pose latents
         pred_obj = self.decode(z_obj_pose, gen_pose) # torch.Size([4, 3, 256, 256])
         
+        # Apply crop in image space
+        if self.apply_conv_crop_img_space:
+            pred_obj = self.manual_crop(pred_obj, zoom_mult)
+
         # # Apply shift in image space
         # if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space and d_shift:
         #     pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
             
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
+    def batch_center_crop_resize(self, images, H_crops, W_crops):
+        batch_size, channels, H, W = images.shape # torch.Size([4, 3, 256, 256])
+        cropped_resized_images = torch.zeros_like(images) # torch.Size([4, 3, 256, 256])
+        resizer = T.Resize(size=(H, W),interpolation=T.InterpolationMode.BILINEAR)
+        for i in range(batch_size):
+            H_crop = int(H_crops[i])
+            W_crop = int(W_crops[i])
+
+            center_cropper = T.CenterCrop(size=(H_crop, W_crop))
+            cropped_image = center_cropper(images[i].unsqueeze(0))
+            cropped_resized_images[i] = resizer(cropped_image)
+
+        return cropped_resized_images
         
+    def manual_crop(self, images, zoom_mult):
+        batch_size, channels, H, W = images.shape
+        
+        H_crops = (H * zoom_mult).long()
+        W_crops = (W * zoom_mult).long()
+        
+        original_crop_recropped_resized = self.batch_center_crop_resize(images, H_crops, W_crops)
+
+        return original_crop_recropped_resized
