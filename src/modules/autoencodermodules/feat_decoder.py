@@ -36,7 +36,7 @@ class PositionalEncoding(nn.Module):
         return sinusoids
 
 class AdaptiveFeatDecoder(nn.Module):
-    def __init__(self, *, ch, out_ch, pose_dim=13, w_dim=512, ch_mult=(1,2,4,8), num_res_blocks,
+    def __init__(self, *, ch, out_ch, num_classes, pose_dim=13, w_dim=512, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
                  attn_type="vanilla", pose_embedding_layers=1, 
@@ -53,6 +53,7 @@ class AdaptiveFeatDecoder(nn.Module):
         self.in_channels = in_channels
         self.give_pre_end = give_pre_end
         self.tanh_out = tanh_out
+        self.num_classes = num_classes
 
         # compute in_ch_mult, block_in and curr_res at lowest res
         in_ch_mult = (1,)+tuple(ch_mult)
@@ -133,10 +134,11 @@ class AdaptiveFeatDecoder(nn.Module):
                                         padding=1)
                                         
         # add PositionalEncoding with k channels
-        self.pose_pe = PositionalEncoding(num_channels=pose_dim, num_frequencies=pe_num_frequencies)
+        num_channels = pose_dim - num_classes
+        self.pose_pe = PositionalEncoding(num_channels=num_channels, num_frequencies=pe_num_frequencies)
 
         # pose embedding map: maps pose_pe output to w
-        curr_in_dim = self.pose_pe.output_dim
+        curr_in_dim = self.pose_pe.output_dim + num_classes
         curr_out_dim = pose_embedding_map_hidden_dim
         pose_embedding_map = nn.Sequential()
         for N in range(pose_embedding_layers):
@@ -155,7 +157,11 @@ class AdaptiveFeatDecoder(nn.Module):
     def forward(self, z, pose):
         # pose --> pose_pe --> w
         # pose: torch.Size([4, 13])
-        pose_pe = self.pose_pe(pose) # torch.Size([4, 156])
+        pose_no_class = pose[:, :-self.num_classes] # torch.Size([4, 10])
+        class_label = pose[:, -self.num_classes:] # torch.Size([4, 3])
+        pose_pe_no_class = self.pose_pe(pose_no_class) # torch.Size([4, 156])
+        pose_pe = torch.cat((pose_pe_no_class, class_label), dim=1) # torch.Size([4, 159])
+
         w = self.pose_embedding_map(pose_pe) # torch.Size([4, 512])
 
         #assert z.shape[1:] == self.z_shape[1:]

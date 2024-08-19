@@ -1007,6 +1007,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
 
         decoder_cfg = ddconfig.copy()
         decoder_cfg["mid_adaptive"] = decoder_mid_adaptive
+        decoder_cfg["num_classes"] = lossconfig["params"]["num_classes"]
         self.decoder = AdaptiveFeatDecoder(**decoder_cfg)
         
         # Dropout Setup
