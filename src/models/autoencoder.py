@@ -744,7 +744,14 @@ class PoseAutoencoder(AutoencoderKL):
         # Initialize optimizer and parameters
         refined_pose = z_pose[:, :-self.num_classes]
         obj_class = z_pose[:, -self.num_classes:]
-        refined_pose_param = nn.Parameter(refined_pose, requires_grad=True)
+        if True: # TODO: for debug only
+            # only perturb x and y
+            refined_pose_chosen = refined_pose[:, :2]
+            refined_pose_not_chosen = refined_pose[:, 2:]
+            refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+        else:
+            refined_pose_chosen = refined_pose
+            refined_pose_param = nn.Parameter(refined_pose, requires_grad=True)
         optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
         # Run K iter refinement steps
         for k in range(self.num_refinement_steps):
@@ -758,7 +765,8 @@ class PoseAutoencoder(AutoencoderKL):
             optim_refined.step()
             print("Gradient: ", refined_pose_param.grad.mean(), refined_pose_param.grad.std())
             print("Poses: ", refined_pose_param.mean(), refined_pose_param.std())
-        
+        if True: # TODO: for debug only 
+            refined_pose = torch.cat([refined_pose_chosen, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
         return dec_pose.data
     
@@ -1191,21 +1199,32 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         # Initialize optimizer and parameters
         refined_pose = z_pose[:, :-self.num_classes]
         obj_class = z_pose[:, -self.num_classes:]
-        refined_pose_param = nn.Parameter(refined_pose, requires_grad=True)
+        if True: # TODO: for debug only
+            # only perturb x and y
+            refined_pose_chosen = refined_pose[:, :2]
+            refined_pose_not_chosen = refined_pose[:, 2:]
+            refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+        else:
+            refined_pose_chosen = refined_pose
+            refined_pose_param = nn.Parameter(refined_pose, requires_grad=True)
         optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
         # Run K iter refinement steps
         for k in range(self.num_refinement_steps):
-            dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
+            if True:
+                refined_pose_param_with_rest = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
+                dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
+            else:
+                dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
             optim_refined.zero_grad()
             enc_pose = self.encode_pose(dec_pose)
             z_obj_pose = z_obj + enc_pose
-            gen_pose = dec_pose
-            gen_image = self.decode(z_obj_pose, gen_pose)
+            gen_image = self.decode(z_obj_pose)
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
             rec_loss.backward()
             optim_refined.step()
             print("Gradient: ", refined_pose_param.grad.mean(), refined_pose_param.grad.std())
             print("Poses: ", refined_pose_param.mean(), refined_pose_param.std())
-        
+        if True: # TODO: for debug only 
+            refined_pose = torch.cat([refined_pose_chosen, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
-        return dec_pose.data
+        return dec_pose.data, gen_image
