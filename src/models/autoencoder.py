@@ -1184,3 +1184,28 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         original_crop_recropped_resized = self.batch_center_crop_resize(images, H_crops, W_crops)
 
         return original_crop_recropped_resized
+
+
+    @torch.enable_grad()
+    def _refinement_step(self, input_patches, z_obj, z_pose):
+        # Initialize optimizer and parameters
+        refined_pose = z_pose[:, :-self.num_classes]
+        obj_class = z_pose[:, -self.num_classes:]
+        refined_pose_param = nn.Parameter(refined_pose, requires_grad=True)
+        optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
+        # Run K iter refinement steps
+        for k in range(self.num_refinement_steps):
+            dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
+            optim_refined.zero_grad()
+            enc_pose = self.encode_pose(dec_pose)
+            z_obj_pose = z_obj + enc_pose
+            gen_pose = dec_pose
+            gen_image = self.decode(z_obj_pose, gen_pose)
+            rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
+            rec_loss.backward()
+            optim_refined.step()
+            print("Gradient: ", refined_pose_param.grad.mean(), refined_pose_param.grad.std())
+            print("Poses: ", refined_pose_param.mean(), refined_pose_param.std())
+        
+        dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
+        return dec_pose.data

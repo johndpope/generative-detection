@@ -34,9 +34,9 @@ iteration = iter(data.datasets['train'])
 
 # %%
 batch = next(iteration)
-model.chunk_size = 128
+model.chunk_size = 1
 model.class_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
-model.fill_factor_thresh = 0.5 # TODO: Set to 0.5 or other value that works on val set
+model.fill_factor_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
 model.num_refinement_steps = 10
 model.ref_lr=1.0e0
 
@@ -59,6 +59,7 @@ with torch.no_grad():
         selected_patches = input_patches[i:i+chunk_size]
         global_patch_index = i + torch.arange(chunk_size)[:len(selected_patches)]
         selected_patch_indices, z_obj, dec_pose, score, class_idx = model._get_valid_patches(selected_patches, global_patch_index)
+        all_patch_indices.append(selected_patch_indices)
         all_objects.append(z_obj)
         all_poses.append(dec_pose)
         all_scores.append(score)
