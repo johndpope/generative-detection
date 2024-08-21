@@ -93,7 +93,7 @@ data:
         patch_height: 256
         patch_aspect_ratio: 1.0
         perturb_center: True
-        perturb_scale: True
+        perturb_scale: False
         perturb_prob: 1.0
         allow_zoomout: False
         

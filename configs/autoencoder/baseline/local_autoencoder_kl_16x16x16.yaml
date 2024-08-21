@@ -94,7 +94,7 @@ data:
         label_names: ['car', 'truck', 'trailer', 'bus', 'construction_vehicle']
         patch_height: 256
         patch_aspect_ratio: 1.0
-        perturb_center: True
+        perturb_center: False
         perturb_scale: True
         perturb_prob: 1.0
         allow_zoomout: False
@@ -117,7 +117,7 @@ data:
         patch_height: 256
         patch_aspect_ratio: 1.0
         perturb_center: False
-        perturb_scale: False
+        perturb_scale: True
         perturb_prob: 0.0
         allow_zoomout: False
     test:
@@ -138,7 +138,7 @@ data:
         patch_height: 256
         patch_aspect_ratio: 1.0
         perturb_center: False
-        perturb_scale: False
+        perturb_scale: True
         perturb_prob: 0.0
         allow_zoomout: False
 
