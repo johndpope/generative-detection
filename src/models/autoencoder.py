@@ -1218,7 +1218,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             optim_refined.zero_grad()
             enc_pose = self.encode_pose(dec_pose)
             z_obj_pose = z_obj + enc_pose
-            gen_image = self.decode(z_obj_pose)
+            gen_pose = dec_pose
+            gen_image = self.decode(z_obj_pose, gen_pose)
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
             rec_loss.backward()
             optim_refined.step()
