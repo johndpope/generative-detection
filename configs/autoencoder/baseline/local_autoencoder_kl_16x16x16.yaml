@@ -144,14 +144,6 @@ data:
 
 lightning:
   callbacks:
-    image_logger:
-      target: src.util.callbacks.ImageLogger
-      params:
-        batch_frequency: 1000
-        max_images: 1
-        increase_log_steps: True
-        disable_local_logging: True
-
     progress_bar:
       target: src.util.callbacks.TQDMProgressBar
       params:

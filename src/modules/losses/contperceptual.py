@@ -10,7 +10,7 @@ import pickle as pkl
 import math
 from mmdet.models.losses.focal_loss import FocalLoss
 from src.data.specs import POSE_DIM, LHW_DIM, FILL_FACTOR_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM
-
+from torchvision.transforms.functional import resized_crop
 
 class LPIPSWithDiscriminator(LPIPSWithDiscriminator_LDM):
     """LPIPS loss with discriminator."""
@@ -253,6 +253,15 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         else:
             gt_obj = torch.cat((rgb_gt, segm_mask_gt), dim=1)
         disc_inputs, reconstructions = gt_obj.clone(), rgb_pred # torch.Size([4, 3, 256, 256]), torch.Size([4, 3, 256, 256])
+        
+        half_size = rgb_gt.shape[-1] //2
+        half_border = (rgb_gt[..., :half_size, half_size-1:half_size].sum(1) == -3)
+        border_size = half_border.sum(1).squeeze()
+        crop_size = (half_size - border_size)*2    
+        disc_inputs_new = disc_inputs.clone()
+        
+        for k, disc in enumerate(disc_inputs):
+            disc_inputs_new[k] = resized_crop(disc, border_size[k], border_size[k], crop_size[k], crop_size[k], size =2*half_size)
         
         # 2D BBOX mask to focus mse loss on objects only
         mask_2d_bbox = mask_2d_bbox.to(rgb_gt.device)
