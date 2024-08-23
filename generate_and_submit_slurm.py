@@ -13,7 +13,6 @@ def create_slurm_script(config_path, script_path, experiment_series_name, experi
 #SBATCH --ntasks-per-node=4
 #SBATCH --gres=gpu:4
 #SBATCH --time=96:00:00
-#SBATCH -A pci
 #SBATCH --mail-type=end
 #SBATCH --mail-type=fail
 #SBATCH --mail-user=tb21@princeton.edu

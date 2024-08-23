@@ -219,7 +219,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.5):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.7):
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
 
@@ -473,7 +473,7 @@ class NuScenesBase(MMDetNuScenesDataset):
             cam_instance.patch = T.ToTensor()(debug_patch_img)
         
         zoom_multiplier = 1.0
-        if self.perturb_z:
+        if self.perturb_z and (postfix != ""):
             pose_6d_new, patch_new, fill_factor_new, mask_2d_bbox_new, zoom_multiplier = self.get_perturbed_depth_crop(pose_6d, patch, fill_factor, patch_size_original, mask_2d_bbox)
             pose_6d = pose_6d_new.reshape_as(pose_6d)
             patch = patch_new.reshape_as(patch)
