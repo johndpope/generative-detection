@@ -14,6 +14,7 @@ from torch.distributions.normal import Normal
 from torchvision.ops import batched_nms, nms
 import pytorch_lightning as pl
 import torchvision.transforms as T
+from torchmetrics.functional.image import total_variation
 
 from ldm.models.autoencoder import AutoencoderKL
 from ldm.util import instantiate_from_config
@@ -1209,6 +1210,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                 refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
                 refined_pose_chosen[:, 0] = gt_x
                 refined_pose_chosen[:, 1] = gt_y
+                print("gt_x: ", gt_x)
+                print("gt_y: ", gt_y)
             else:
                 refined_pose_chosen = refined_pose[:, :2]
             
@@ -1217,6 +1220,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         else:
             refined_pose_chosen = refined_pose
             refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+        print("Refined pose param: ", refined_pose_param)
         optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
 
         x_list = torch.zeros(self.num_refinement_steps)
@@ -1224,30 +1228,39 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         grad_x_list = torch.zeros(self.num_refinement_steps)
         grad_y_list = torch.zeros(self.num_refinement_steps)
         loss_list = torch.zeros(self.num_refinement_steps)
+        tv_loss_list = torch.zeros(self.num_refinement_steps)
 
         # Run K iter refinement steps
         for k in range(self.num_refinement_steps):
             if True:
                 refined_pose_param_with_rest = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
                 dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
+                print("Dec pose: ", dec_pose)
             else:
                 dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
-            
+            x_list[k] = refined_pose_param[:, 0].clone().squeeze()
+            y_list[k] = refined_pose_param[:, 1].clone().squeeze()
             optim_refined.zero_grad()
             enc_pose = self.encode_pose(dec_pose)
             z_obj_pose = z_obj + enc_pose
             gen_pose = dec_pose
             gen_image = self.decode(z_obj_pose, gen_pose)
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
-            rec_loss.backward()
+            tv_loss = self._get_tv_loss(gen_image, weight=self.tv_loss_weight)
+            refinement_loss = rec_loss + tv_loss
+            refinement_loss.backward()
             optim_refined.step()
-            x_list[k] = refined_pose_param[:, 0].clone().squeeze()
-            y_list[k] = refined_pose_param[:, 1].clone().squeeze()
+            
             grad_x_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
             grad_y_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
-            loss_list[k] = rec_loss.clone().squeeze()
-            
+            loss_list[k] = refinement_loss.clone().squeeze()
+            tv_loss_list[k] = tv_loss.clone().squeeze()
+        
         if True: # TODO: for debug only 
             refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
-        return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list
+        return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list
+
+    def _get_tv_loss(self, x, reduction='sum', weight=1e0):
+        tv_loss = total_variation(x, reduction=reduction) * weight
+        return tv_loss

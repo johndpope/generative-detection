@@ -13,6 +13,7 @@ import numpy as np
 import math
 from src.data.preprocessing.data_modules import DataModuleFromConfig
 from torchvision.utils import save_image
+import os
 
 # %%
 
@@ -46,6 +47,7 @@ while True:
     model.fill_factor_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
     model.num_refinement_steps = 10
     model.ref_lr=5.0e-2
+    model.tv_loss_weight = 1.0e-4
 
     # Prepare Input
     input_patches = batch[model.image_rgb_key].to(model.device).unsqueeze(0) # torch.Size([B, 3, 256, 256])
@@ -83,25 +85,22 @@ while True:
     patches_w_objs = input_patches[all_patch_indices]
     gt_x = batch[model.pose_key][0]
     gt_y = batch[model.pose_key][1]
-    dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses, gt_x, gt_y)
-    # print ground truth pose
-
-    # plot x_list, grad_x_list on same plot with legend, at each refinement step k. refinement step is x axis. draw line at ground truth pose.
-    # Do the same for y_list and grad_y_list. 
-
-    def plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y):
+    save_dir = "inference_refinement"
+    os.makedirs(save_dir, exist_ok=True)
+    def plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix=""):
         x_list = x_list.squeeze().detach().cpu().numpy()
         grad_x_list = grad_x_list.squeeze().detach().cpu().numpy()
         y_list = y_list.squeeze().detach().cpu().numpy()
         grad_y_list = grad_y_list.squeeze().detach().cpu().numpy()
         gt_x = gt_x.squeeze().detach().cpu().numpy()
         gt_y = gt_y.squeeze().detach().cpu().numpy()
+        loss_list = loss_list.squeeze().detach().cpu().numpy()
 
         refinement_steps = len(x_list)
         plt.figure(figsize=(10, 5))
         
         # Plot x_list and grad_x_list
-        plt.subplot(1, 2, 1)
+        plt.subplot(1, 1, 1)
         plt.plot(range(refinement_steps), x_list, label='x_list')
         plt.plot(range(refinement_steps), grad_x_list, label='grad_x_list')
         plt.axhline(y=gt_x, color='r', linestyle='--', label='Ground Truth x')
@@ -119,22 +118,35 @@ while True:
         plt.ylabel('Value')
         plt.title('Y List and Grad Y List')
         plt.legend()
+
+        # Plot loss_list
+        plt.subplot(1, 3, 3)
+        plt.plot(range(refinement_steps), loss_list, label='Loss')
+        #plot tv_loss_list
+        plt.plot(range(refinement_steps), tv_loss_list, label='TV Loss')
+        plt.xlabel('Refinement Step')
+        plt.ylabel('Loss')
+        plt.title('Loss at Each Step')
+        plt.legend()
         
         plt.tight_layout()
         
         # save plot
-        plt.savefig(f"grads_{counter}.png")
-        plt.show()
+        plt.savefig(f"{save_dir}/grads_{counter}_{post_fix}.png")
     
     def scale_to_0_1(img):
         img = img - img.min()
         img = img / img.max()
         return img
-
-    # save input_patches
-    save_image(scale_to_0_1(input_patches), f"input_patches_{counter}.png")
-    plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y)
-    save_image(scale_to_0_1(gen_image), f"gen_image_{counter}.png")
-    counter += 1
-
     
+    dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses, gt_x, gt_y)
+    # save input_patches
+    save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches_{counter}_gt.png")
+    plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix="gt")
+    save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_gt.png")
+    dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
+    save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches_{counter}_pred.png")
+    plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix="pred")
+    save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_pred.png")
+    
+    counter += 1
