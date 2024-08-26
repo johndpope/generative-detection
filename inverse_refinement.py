@@ -37,12 +37,15 @@ iteration = iter(data.datasets['train'])
 # %%
 counter = 0
 while True:
-    batch = next(iteration)
+    k = 4 # get kth batch
+    for i in range(k):
+        batch = next(iteration)
+
     model.chunk_size = 1
     model.class_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
     model.fill_factor_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
     model.num_refinement_steps = 10
-    model.ref_lr=1.0e0
+    model.ref_lr=5.0e-2
 
     # Prepare Input
     input_patches = batch[model.image_rgb_key].to(model.device).unsqueeze(0) # torch.Size([B, 3, 256, 256])
@@ -80,9 +83,8 @@ while True:
     patches_w_objs = input_patches[all_patch_indices]
     gt_x = batch[model.pose_key][0]
     gt_y = batch[model.pose_key][1]
-    dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
+    dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses, gt_x, gt_y)
     # print ground truth pose
-    print("Refined pose: ", dec_pose_refined[0])
 
     # plot x_list, grad_x_list on same plot with legend, at each refinement step k. refinement step is x axis. draw line at ground truth pose.
     # Do the same for y_list and grad_y_list. 

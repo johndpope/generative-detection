@@ -740,13 +740,18 @@ class PoseAutoencoder(AutoencoderKL):
         return torch.empty_like(global_patch_index[:0]), torch.empty_like(z_obj[:0]), torch.empty_like(dec_pose[:0]), torch.empty_like(score[:0]), torch.empty_like(class_idx[:0])
 
     @torch.enable_grad()
-    def _refinement_step(self, input_patches, z_obj, z_pose):
+    def _refinement_step(self, input_patches, z_obj, z_pose, gt_x=None, gt_y=None):
         # Initialize optimizer and parameters
         refined_pose = z_pose[:, :-self.num_classes]
         obj_class = z_pose[:, -self.num_classes:]
         if True: # TODO: for debug only
-            # only perturb x and y
-            refined_pose_chosen = refined_pose[:, :2]
+            if gt_x is not None and gt_y is not None:
+                refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
+                refined_pose_chosen[:, 0] = gt_x
+                refined_pose_chosen[:, 1] = gt_y
+            else:
+                refined_pose_chosen = refined_pose[:, :2]
+            
             refined_pose_not_chosen = refined_pose[:, 2:]
             refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
         else:
@@ -763,8 +768,8 @@ class PoseAutoencoder(AutoencoderKL):
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
             rec_loss.backward()
             optim_refined.step()
-            print("Gradient: ", refined_pose_param.grad.mean(), refined_pose_param.grad.std())
-            print("Poses: ", refined_pose_param.mean(), refined_pose_param.std())
+            # print("Gradient: ", refined_pose_param.grad.mean(), refined_pose_param.grad.std())
+            # print("Poses: ", refined_pose_param.mean(), refined_pose_param.std())
         if True: # TODO: for debug only 
             refined_pose = torch.cat([refined_pose_chosen, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
@@ -1195,24 +1200,30 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
 
 
     @torch.enable_grad()
-    def _refinement_step(self, input_patches, z_obj, z_pose):
+    def _refinement_step(self, input_patches, z_obj, z_pose, gt_x=None, gt_y=None):
         # Initialize optimizer and parameters
         refined_pose = z_pose[:, :-self.num_classes]
         obj_class = z_pose[:, -self.num_classes:]
         if True: # TODO: for debug only
-            # only perturb x and y
-            refined_pose_chosen = refined_pose[:, :2]
+            if gt_x is not None and gt_y is not None:
+                refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
+                refined_pose_chosen[:, 0] = gt_x
+                refined_pose_chosen[:, 1] = gt_y
+            else:
+                refined_pose_chosen = refined_pose[:, :2]
+            
             refined_pose_not_chosen = refined_pose[:, 2:]
             refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
         else:
             refined_pose_chosen = refined_pose
-            refined_pose_param = nn.Parameter(refined_pose, requires_grad=True)
+            refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
         optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
 
         x_list = torch.zeros(self.num_refinement_steps)
         y_list = torch.zeros(self.num_refinement_steps)
         grad_x_list = torch.zeros(self.num_refinement_steps)
         grad_y_list = torch.zeros(self.num_refinement_steps)
+        loss_list = torch.zeros(self.num_refinement_steps)
 
         # Run K iter refinement steps
         for k in range(self.num_refinement_steps):
@@ -1234,6 +1245,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             y_list[k] = refined_pose_param[:, 1].clone().squeeze()
             grad_x_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
             grad_y_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
+            loss_list[k] = rec_loss.clone().squeeze()
             
         if True: # TODO: for debug only 
             refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)

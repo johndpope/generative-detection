@@ -13,6 +13,7 @@ slurm_output
 .vscode
 images
 .logs
+*.png
 
 */launch.json
 
