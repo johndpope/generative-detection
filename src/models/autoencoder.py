@@ -771,7 +771,7 @@ class PoseAutoencoder(AutoencoderKL):
         return dec_pose.data
     
     def _init_refinement_optimizer(self, pose, lr=1e-3):
-        return torch.optim.Adam([pose], lr=lr)
+        return torch.optim.AdamW([pose], lr=lr)
     
     def configure_optimizers(self):
         lr = self.learning_rate
@@ -1208,6 +1208,12 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             refined_pose_chosen = refined_pose
             refined_pose_param = nn.Parameter(refined_pose, requires_grad=True)
         optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
+
+        x_list = torch.zeros(self.num_refinement_steps)
+        y_list = torch.zeros(self.num_refinement_steps)
+        grad_x_list = torch.zeros(self.num_refinement_steps)
+        grad_y_list = torch.zeros(self.num_refinement_steps)
+
         # Run K iter refinement steps
         for k in range(self.num_refinement_steps):
             if True:
@@ -1215,6 +1221,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                 dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
             else:
                 dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
+            
             optim_refined.zero_grad()
             enc_pose = self.encode_pose(dec_pose)
             z_obj_pose = z_obj + enc_pose
@@ -1223,9 +1230,12 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
             rec_loss.backward()
             optim_refined.step()
-            print("Gradient: ", refined_pose_param.grad.mean(), refined_pose_param.grad.std())
-            print("Poses: ", refined_pose_param.mean(), refined_pose_param.std())
+            x_list[k] = refined_pose_param[:, 0].clone().squeeze()
+            y_list[k] = refined_pose_param[:, 1].clone().squeeze()
+            grad_x_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
+            grad_y_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
+            
         if True: # TODO: for debug only 
-            refined_pose = torch.cat([refined_pose_chosen, refined_pose_not_chosen], dim=-1)
+            refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
-        return dec_pose.data, gen_image
+        return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list

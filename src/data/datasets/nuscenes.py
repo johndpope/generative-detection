@@ -219,7 +219,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.7):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.95):
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
 
