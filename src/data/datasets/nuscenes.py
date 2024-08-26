@@ -364,7 +364,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return pose_6d_no_v1v2, bbox_sizes, yaw, debug_patch_img
     
-    def _get_shifted_patch_center(self, center_2d, bbox, p=0.8, eps=1e-8):
+    def _get_shifted_patch_center(self, center_2d, bbox, p=0.7, eps=1e-8):
         x1, y1, x2, y2 = bbox
         center_x, center_y = center_2d
 

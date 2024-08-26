@@ -16,8 +16,8 @@ from torchvision.utils import save_image
 
 # %%
 
-config_path = "configs/autoencoder/4_adaptive_conv/learnt_crop_mid_adaptive_zoomout.yaml"
-checkpoint_path = "logs/2024-08-13T21-34-52_zoomout/checkpoints/last.ckpt"
+config_path = "configs/autoencoder/4_adaptive_conv/learnt_shift_mini.yaml"
+checkpoint_path = "logs/2024-08-23T05-06-58_learnt_shift/checkpoints/last.ckpt"
 config = OmegaConf.load(config_path)
 
 def load_model(config, ckpt_path):
