@@ -1208,10 +1208,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         if True: # TODO: for debug only
             if gt_x is not None and gt_y is not None:
                 refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
-                refined_pose_chosen[:, 0] = gt_x
-                refined_pose_chosen[:, 1] = gt_y
-                print("gt_x: ", gt_x)
-                print("gt_y: ", gt_y)
+                refined_pose_chosen[:, 0] = min(gt_x + 0.3, 1.0).reshape_as(refined_pose[:, 0])
+                refined_pose_chosen[:, 1] = min(gt_y + 0.3, 1.0).reshape_as(refined_pose[:, 1])
             else:
                 refined_pose_chosen = refined_pose[:, :2]
             
@@ -1254,7 +1252,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             grad_x_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
             grad_y_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
             loss_list[k] = refinement_loss.clone().squeeze()
-            tv_loss_list[k] = tv_loss.clone().squeeze()
+            tv_loss_list[k] = tv_loss.clone().squeeze().detach()
         
         if True: # TODO: for debug only 
             refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)

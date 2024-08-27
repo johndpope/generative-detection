@@ -38,14 +38,14 @@ iteration = iter(data.datasets['train'])
 # %%
 counter = 0
 while True:
-    k = 4 # get kth batch
+    k = 1 # get kth batch
     for i in range(k):
         batch = next(iteration)
 
     model.chunk_size = 1
     model.class_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
     model.fill_factor_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
-    model.num_refinement_steps = 10
+    model.num_refinement_steps = 5
     model.ref_lr=5.0e-2
     model.tv_loss_weight = 1.0e-4
 
@@ -97,10 +97,10 @@ while True:
         loss_list = loss_list.squeeze().detach().cpu().numpy()
 
         refinement_steps = len(x_list)
-        plt.figure(figsize=(10, 5))
+        plt.figure(figsize=(15, 5))
         
         # Plot x_list and grad_x_list
-        plt.subplot(1, 1, 1)
+        plt.subplot(1, 3, 1)
         plt.plot(range(refinement_steps), x_list, label='x_list')
         plt.plot(range(refinement_steps), grad_x_list, label='grad_x_list')
         plt.axhline(y=gt_x, color='r', linestyle='--', label='Ground Truth x')
@@ -110,7 +110,7 @@ while True:
         plt.legend()
         
         # Plot y_list and grad_y_list
-        plt.subplot(1, 2, 2)
+        plt.subplot(1, 3, 2)
         plt.plot(range(refinement_steps), y_list, label='y_list')
         plt.plot(range(refinement_steps), grad_y_list, label='grad_y_list')
         plt.axhline(y=gt_y, color='r', linestyle='--', label='Ground Truth y')
@@ -122,8 +122,6 @@ while True:
         # Plot loss_list
         plt.subplot(1, 3, 3)
         plt.plot(range(refinement_steps), loss_list, label='Loss')
-        #plot tv_loss_list
-        plt.plot(range(refinement_steps), tv_loss_list, label='TV Loss')
         plt.xlabel('Refinement Step')
         plt.ylabel('Loss')
         plt.title('Loss at Each Step')
