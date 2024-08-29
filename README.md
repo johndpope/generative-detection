@@ -1,13 +1,13 @@
 # OD-VAE: Inverting Generation for 3D Object Detection
 This repository is the official implementation of [OD-VAE: Inverting Generation for 3D Object Detection]().
 
-> TODO: [arXiv]() | [BibTex]()
+> [arXiv]() | [BibTex](./CITATION.cff)
 
-> TODO: Method figure
+> ![OD-VAE and Latent Variables of an 3D Object.](./figs/pipeline.png)
 
 [OD-VAE: Inverting Generation for 3D Object Detection]()
-> TODO: [Anonymous Author(s)]()
-> TODO: [Demo link]()
+> [Anonymous Author(s)]()
+> [Demo link]()
 
 ## Requirements
 
