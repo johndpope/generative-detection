@@ -1092,8 +1092,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        # apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
         apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
+        assert not apply_manual_crop, "dont apply manual crop in adaptive pose auto experiments"
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -1119,45 +1119,18 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             
         if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
             pred_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
-        
-        # Add gaussian noise to object feature latents
-        # if self.add_noise_to_z_obj:
-        #     # draw from standard normal distribution
-        #     std_normal = Normal(0, 1)
-        #     z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
-        #     z_obj = z_obj + z_obj_noise
-        
+            
         # Replace pose with other pose if supervised with other patch
         if second_pose is not None:
             gen_pose = second_pose.to(pred_pose)
         else:
             gen_pose = pred_pose
 
-        if not apply_manual_crop:
-
-            # Run pose encoder layers  
-            z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
-
-            assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
-            
-            # Add object and pose latents
-            z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
-        else:
-            z_obj_pose = z_obj
+        z_obj_pose = z_obj
+        
+        if apply_manual_crop:
             assert zoom_mult is not None, "zoom_mult is not specified, aka None"
-            # # Compute shift if shift between both patches
-            # if second_pose is not None:
-            #     shift_x = second_pose[:, 0] - pose_gt[:, 0]
-            #     shift_y = second_pose[:, 1] - pose_gt[:, 1]
-            #     d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
-            # else:
-            #     shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
-            #     d_shift = torch.tensor([0.0])
-        
-        # # Apply shift in latent space
-        # if self.apply_conv_shift_latent_space and d_shift:
-        #     z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
-        
+
         # Apply crop in latent space
         if self.apply_conv_crop_latent_space:
             z_obj_pose = self.manual_crop(z_obj_pose, zoom_mult)
@@ -1168,11 +1141,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         # Apply crop in image space
         if self.apply_conv_crop_img_space:
             pred_obj = self.manual_crop(pred_obj, zoom_mult)
-
-        # # Apply shift in image space
-        # if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space and d_shift:
-        #     pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
-            
+                    
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
     def batch_center_crop_resize(self, images, H_crops, W_crops):
@@ -1218,7 +1187,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         else:
             refined_pose_chosen = refined_pose
             refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
-        print("Refined pose param: ", refined_pose_param)
         optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
 
         x_list = torch.zeros(self.num_refinement_steps)
@@ -1233,7 +1201,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             if True:
                 refined_pose_param_with_rest = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
                 dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
-                print("Dec pose: ", dec_pose)
             else:
                 dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
             x_list[k] = refined_pose_param[:, 0].clone().squeeze()
