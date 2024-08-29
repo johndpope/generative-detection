@@ -75,7 +75,7 @@ data:
     wrap: True
     persistent_workers: True
     train:
-      target: src.data.datasets.nuscenes.NuScenesTrainMini
+      target: src.data.datasets.nuscenes.NuScenesTrain
       params:
         data_root: data/nuscenes
         pipeline: []
@@ -97,7 +97,7 @@ data:
         allow_zoomout: True
         
     validation:
-      target: src.data.datasets.nuscenes.NuScenesValidationMini
+      target: src.data.datasets.nuscenes.NuScenesValidation
       params:
         data_root: data/nuscenes
         pipeline: []
