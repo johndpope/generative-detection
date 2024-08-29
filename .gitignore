@@ -14,6 +14,9 @@ slurm_output
 images
 .logs
 *.png
+generate_and_submit_slurm.py
+dnnlib
+torch_utils
 
 */launch.json
 
