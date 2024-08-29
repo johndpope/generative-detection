@@ -805,7 +805,7 @@ class PoseAutoencoder(AutoencoderKL):
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
 
-        rgb_in, rgb_gt, pose_gt, _, _, _, _, _, _, _, _ = self.get_all_inputs(batch)
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult = self.get_all_inputs(batch)
         
         rgb_in_viz = self._rescale(rgb_in)
         rgb_gt_viz = self._rescale(rgb_gt)
