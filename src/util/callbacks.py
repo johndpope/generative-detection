@@ -2,6 +2,7 @@
 import os
 import time
 import numpy as np
+from pathlib import Path
 import torch
 import torchvision
 from PIL import Image
@@ -57,8 +58,10 @@ class SetupCallback(Callback):
                     os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
             logging.info("Project config")
             logging.info(OmegaConf.to_yaml(self.config))
-            OmegaConf.save(self.config,
-                           os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
+            os.makedirs(self.cfgdir, exist_ok=True)
+            cfgpath = os.path.join(self.cfgdir, "{}-project.yaml".format(self.now))
+            Path(cfgpath).touch()
+            OmegaConf.save(self.config, cfgpath)
             logging.info("Lightning config")
             logging.info(OmegaConf.to_yaml(self.lightning_config))
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
