@@ -1106,8 +1106,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
-        assert not apply_manual_crop, "dont apply manual crop in adaptive pose auto experiments"
+        # apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
+        # assert not apply_manual_crop, "dont apply manual crop in adaptive pose auto experiments"
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -1142,46 +1142,21 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
 
         z_obj_pose = z_obj
 
-        if apply_manual_crop:
-            assert zoom_mult is not None, "zoom_mult is not specified, aka None"
+        # if apply_manual_crop:
+        #     assert zoom_mult is not None, "zoom_mult is not specified, aka None"
 
-        # Apply crop in latent space
-        if self.apply_conv_crop_latent_space:
-            z_obj_pose = self.manual_crop(z_obj_pose, zoom_mult)
+        # # Apply crop in latent space
+        # if self.apply_conv_crop_latent_space:
+        #     z_obj_pose = self.manual_crop(z_obj_pose, zoom_mult)
 
         # Predict images from object and pose latents
         pred_obj = self.decode(z_obj_pose, gen_pose) # torch.Size([4, 3, 256, 256])
         
-        # Apply crop in image space
-        if self.apply_conv_crop_img_space:
-            pred_obj = self.manual_crop(pred_obj, zoom_mult)
+        # # Apply crop in image space
+        # if self.apply_conv_crop_img_space:
+        #     pred_obj = self.manual_crop(pred_obj, zoom_mult)
                     
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
-
-    def batch_center_crop_resize(self, images, H_crops, W_crops):
-        batch_size, channels, H, W = images.shape # torch.Size([4, 3, 256, 256])
-        cropped_resized_images = torch.zeros_like(images) # torch.Size([4, 3, 256, 256])
-        resizer = T.Resize(size=(H, W),interpolation=T.InterpolationMode.BILINEAR)
-        for i in range(batch_size):
-            H_crop = int(H_crops[i])
-            W_crop = int(W_crops[i])
-
-            center_cropper = T.CenterCrop(size=(H_crop, W_crop))
-            cropped_image = center_cropper(images[i].unsqueeze(0))
-            cropped_resized_images[i] = resizer(cropped_image)
-
-        return cropped_resized_images
-        
-    def manual_crop(self, images, zoom_mult):
-        batch_size, channels, H, W = images.shape
-        
-        H_crops = (H * zoom_mult).long()
-        W_crops = (W * zoom_mult).long()
-        
-        original_crop_recropped_resized = self.batch_center_crop_resize(images, H_crops, W_crops)
-
-        return original_crop_recropped_resized
-
 
     @torch.enable_grad()
     def _refinement_step(self, input_patches, z_obj, z_pose, gt_x=None, gt_y=None):
