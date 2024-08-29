@@ -401,7 +401,8 @@ class PoseAutoencoder(AutoencoderKL):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        apply_manual_shift = self.apply_conv_shift_img_space or self.apply_conv_shift_latent_space
+        apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
+        assert apply_manual_crop "manual crop experiment only in vanilla autoencoder"
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -428,29 +429,15 @@ class PoseAutoencoder(AutoencoderKL):
         if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
             pred_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
         
-        # Add gaussian noise to object feature latents
-        # if self.add_noise_to_z_obj:
-        #     # draw from standard normal distribution
-        #     std_normal = Normal(0, 1)
-        #     z_obj_noise = std_normal.sample(posterior_obj.mean.shape).to(self.device) # torch.Size([4, 16, 16, 16])
-        #     z_obj = z_obj + z_obj_noise
-            
+        z_obj_pose = z_obj
+        
         if not apply_manual_shift:
-             # Replace pose with other pose if supervised with other patch
+            # Replace pose with other pose if supervised with other patch
             if second_pose is not None:
                 gen_pose = second_pose.to(pred_pose)
             else:
                 gen_pose = pred_pose
-            
-            # Run pose encoder layers  
-            z_pose = self.encode_pose(gen_pose) # torch.Size([B, 16, 16, 16])
-
-            assert z_obj.shape == z_pose.shape, f"z_obj shape: {z_obj.shape}, z_pose shape: {z_pose.shape}"
-            
-            # Add object and pose latents
-            z_obj_pose = z_obj + z_pose # torch.Size([B, 16, 16, 16])
         else:
-            z_obj_pose = z_obj
             # Compute shift if shift between both patches
             if second_pose is not None:
                 shift_x = second_pose[:, 0] - pose_gt[:, 0]
@@ -460,18 +447,45 @@ class PoseAutoencoder(AutoencoderKL):
                 shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
                 d_shift = torch.tensor([0.0])
         
-        # Apply shift in latent space
-        if self.apply_conv_shift_latent_space and d_shift:
-            z_obj_pose = self.apply_manual_shift(z_obj_pose, shift_x, shift_y)  
+        if apply_manual_crop:
+            assert zoom_mult is not None, "zoom_mult is not specified, aka None"
+
+        # Apply crop in latent space
+        if self.apply_conv_crop_latent_space:
+            z_obj_pose = self.manual_crop(z_obj_pose, zoom_mult)
         
         # Predict images from object and pose latents
         pred_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
         
-        # Apply shift in image space
-        if self.apply_conv_shift_img_space and not self.apply_conv_shift_latent_space and d_shift:
-            pred_obj = self.apply_manual_shift(pred_obj, shift_x, shift_y)
+        # Apply crop in image space
+        if self.apply_conv_crop_img_space:
+            pred_obj = self.manual_crop(pred_obj, zoom_mult)
             
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
+
+    def batch_center_crop_resize(self, images, H_crops, W_crops):
+        batch_size, channels, H, W = images.shape # torch.Size([4, 3, 256, 256])
+        cropped_resized_images = torch.zeros_like(images) # torch.Size([4, 3, 256, 256])
+        resizer = T.Resize(size=(H, W),interpolation=T.InterpolationMode.BILINEAR)
+        for i in range(batch_size):
+            H_crop = int(H_crops[i])
+            W_crop = int(W_crops[i])
+
+            center_cropper = T.CenterCrop(size=(H_crop, W_crop))
+            cropped_image = center_cropper(images[i].unsqueeze(0))
+            cropped_resized_images[i] = resizer(cropped_image)
+
+        return cropped_resized_images
+    
+    def manual_crop(self, images, zoom_mult):
+        batch_size, channels, H, W = images.shape
+        
+        H_crops = (H * zoom_mult).long()
+        W_crops = (W * zoom_mult).long()
+        
+        original_crop_recropped_resized = self.batch_center_crop_resize(images, H_crops, W_crops)
+
+        return original_crop_recropped_resized
 
     def get_pose_input(self, batch, k, postfix=""):
         x = batch[k+postfix] 
@@ -1127,7 +1141,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             gen_pose = pred_pose
 
         z_obj_pose = z_obj
-        
+
         if apply_manual_crop:
             assert zoom_mult is not None, "zoom_mult is not specified, aka None"
 
