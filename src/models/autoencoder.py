@@ -6,14 +6,15 @@ import numpy as np
 import logging
 from contextlib import contextmanager
 
+import itertools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.distributions.normal import Normal
 from torchvision.ops import batched_nms, nms
-import pytorch_lightning as pl
 import torchvision.transforms as T
+import pytorch_lightning as pl
 from torchmetrics.functional.image import total_variation
 
 from ldm.models.autoencoder import AutoencoderKL
@@ -46,40 +47,40 @@ class PoseAutoencoder(AutoencoderKL):
     """
 
     def __init__(self,
-                 ddconfig,
-                 lossconfig,
-                 embed_dim,
-                 ckpt_path=None,
-                 ignore_keys=[],
-                 image_mask_key=None,
-                 image_rgb_key="patch",
-                 pose_key="pose_6d",
-                 fill_factor_key="fill_factor",
-                 pose_perturbed_key="pose_6d_perturbed",
-                 class_key="class_id",
-                 bbox_key="bbox_sizes",
-                 colorize_nlabels=None,
-                 monitor=None,
-                 pose_decoder_config=None,
-                 pose_encoder_config=None,
-                 dropout_prob_init=1.0,
-                 dropout_prob_final=0.7,
-                 dropout_warmup_steps=5000,
-                 pose_conditioned_generation_steps=10000,
-                 perturb_rad_warmup_steps=100000,
-                 intermediate_img_feature_leak_steps=0,
-                 add_noise_to_z_obj=False,
-                 train_on_yaw=True,
-                 ema_decay=0.999,
-                 apply_conv_crop_img_space=False,
-                 apply_conv_crop_latent_space=False,
-                 apply_convolutional_shift_img_space=False,
-                 apply_convolutional_shift_latent_space=False,
-                 quantconfig=None,
-                 quantize_obj=False,
-                 quantize_pose=False,
-                 **kwargs
-                 ):
+                ddconfig,
+                lossconfig,
+                embed_dim,
+                ckpt_path=None,
+                ignore_keys=[],
+                image_mask_key=None,
+                image_rgb_key="patch",
+                pose_key="pose_6d",
+                fill_factor_key="fill_factor",
+                pose_perturbed_key="pose_6d_perturbed",
+                class_key="class_id",
+                bbox_key="bbox_sizes",
+                colorize_nlabels=None,
+                monitor=None,
+                pose_decoder_config=None,
+                pose_encoder_config=None,
+                dropout_prob_init=1.0,
+                dropout_prob_final=0.7,
+                dropout_warmup_steps=5000,
+                pose_conditioned_generation_steps=10000,
+                perturb_rad_warmup_steps=100000,
+                intermediate_img_feature_leak_steps=0,
+                add_noise_to_z_obj=False,
+                train_on_yaw=True,
+                ema_decay=0.999,
+                apply_conv_crop_img_space=False,
+                apply_conv_crop_latent_space=False,
+                apply_convolutional_shift_img_space=False,
+                apply_convolutional_shift_latent_space=False,
+                quantconfig=None,
+                quantize_obj=False,
+                quantize_pose=False,
+                **kwargs
+                ):
         pl.LightningModule.__init__(self)
         
         # Inputs
@@ -109,10 +110,7 @@ class PoseAutoencoder(AutoencoderKL):
             quantconfig["params"]["e_dim"] = embed_dim
             self.quantize_pose = instantiate_from_config(quantconfig)
 
-        if ddconfig["double_z"]:
-            mult_z = 2
-        else:
-            mult_z = 1
+        mult_z = 2 if ddconfig["double_z"] else 1
             
         self.quant_conv_obj = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], quant_conv_obj_embed_dim, 1)
         self.quant_conv_pose = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
@@ -183,7 +181,7 @@ class PoseAutoencoder(AutoencoderKL):
         if ckpt_path is not None:
             try:
                 self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-            except Exception as e:
+            except Exception:
                 # add optimizer to ignore_keys list
                 ignore_keys = ignore_keys + ["optimizer"]
                 self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
@@ -193,6 +191,14 @@ class PoseAutoencoder(AutoencoderKL):
         ### Placeholders
         self.patch_center_rad = None
         self.patch_center_rad_init = None
+
+
+        ## Inverse refinement cfgs
+        self.chunk_size = 128
+        self.class_thresh = 0.3 # TODO: Set to 0.5 or other value that works on val set
+        self.fill_factor_thresh = 0.5 # TODO: Set to 0.5 or other value that works on val set
+        self.num_refinement_steps = 10
+        self.ref_lr=1.0e0
 
     @contextmanager
     def ema_scope(self, context=None):
@@ -213,23 +219,12 @@ class PoseAutoencoder(AutoencoderKL):
         # pass
         if self.use_ema:
             self.model_ema(self)
-        
-    def _get_enc_feat_dims(self, ddconfig):
-        """ pass in dummy input of size from config to get the output size of encoder and quant_conv """
-        # multiply all feat dims
-        return self.feat_dims[0] * self.feat_dims[1] * self.feat_dims[2]
-    
+            
     def _draw_samples(self, z_mu, z_logstd):
-        
         z_std = torch.exp(z_logstd)
         z_dim = z_mu.size(1)
-        
-        # draw samples from variational posterior to calculate
-        # E[p(x|z)]
         r = Variable(x.data.new(b,z_dim).normal_())
-        z = z_std*r + z_mu
-        
-        return z
+        return z_std*r + z_mu
     
     def _decode_pose_to_distribution(self, z, sample_posterior=True):
         # no mu and std dev for class prediction, this is just a class confidence score list of len num_classes
@@ -267,20 +262,6 @@ class PoseAutoencoder(AutoencoderKL):
         dec_pose = torch.cat([bbox_pred, c], dim=-1) # torch.Size([8, 19])
         return dec_pose, bbox_posterior
     
-    def encode_pose(self, x):
-        """
-        Encode the pose to get the pose feature map from the given pose tensor.
-        
-        Args:
-            x: Input pose tensor.
-        
-        Returns:
-            Encoded pose feature map tensor.
-        """
-        # x: torch.Size([4, 8])
-        flattened_encoded_pose_feat_map = self.pose_encoder(x) # torch.Size([4, 4096]) = 4, 16*16*16     
-        return flattened_encoded_pose_feat_map.view(flattened_encoded_pose_feat_map.size(0), self.z_channels, self.feat_dims[1], self.feat_dims[2])
-    
     def encode(self, x):
         h = self.encoder(x) # torch.Size([B, F, 16, 16])
         moments_obj = self.quant_conv_obj(h) # torch.Size([B, 32, 16, 16])
@@ -310,28 +291,23 @@ class PoseAutoencoder(AutoencoderKL):
         """
         if self.iter_counter < self.encoder_pretrain_steps: # encoder pretraining phase
             # set dropout probability to 1.0
-            dropout_prob = self.dropout_prob_init
+            return self.dropout_prob_init
         elif self.iter_counter < self.intermediate_img_feature_leak_steps + self.encoder_pretrain_steps:
-            dropout_prob = 0.95
-        
+            return 0.95
         elif self.iter_counter < self.intermediate_img_feature_leak_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps: # pose conditioned generation phase
-            dropout_prob = self.dropout_prob_init
-        
+            return self.dropout_prob_init
         elif self.iter_counter < self.intermediate_img_feature_leak_steps + self.dropout_warmup_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps: # pose conditioned generation phase
             # linearly decrease dropout probability from initial to final value
             if self.dropout_prob_init == self.dropout_prob_final or self.dropout_warmup_steps == 0:
-                dropout_prob = self.dropout_prob_final
+                return self.dropout_prob_final
             else:
-                dropout_prob = self.dropout_prob_init - (self.dropout_prob_init - self.dropout_prob_final) * (self.iter_counter - self.encoder_pretrain_steps) / self.dropout_warmup_steps # 1.0 - (1.0 - 0.7) * (10000 - 10000) / 10000 = 1.0
-        
+                return self.dropout_prob_init - (self.dropout_prob_init - self.dropout_prob_final) * (self.iter_counter - self.encoder_pretrain_steps) / self.dropout_warmup_steps # 1.0 - (1.0 - 0.7) * (10000 - 10000) / 10000 = 1.0
         else: # VAE phase
             # set dropout probability to dropout_prob_final
-            dropout_prob = self.dropout_prob_final
-        
-        return dropout_prob
+            return self.dropout_prob_final
 
     def apply_manual_shift(self, images, shifts_x, shifts_y):
-        batch_size, channels, height, width = images.shape
+        batch_size, _, height, width = images.shape
         
         shifts_x_pixels = (shifts_x * (width // 2)).int()
         shifts_y_pixels = (shifts_y * (height // 2)).int()
@@ -353,41 +329,9 @@ class PoseAutoencoder(AutoencoderKL):
         grid = torch.stack((grid_x, grid_y), dim=-1)
 
         # Sample the images using the computed grid
-        shifted_images = F.grid_sample(images, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
+        return F.grid_sample(images, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
 
-        return shifted_images
-
-    
-    def apply_convolutional_shift(self, images, shifts_x, shifts_y):
-        batch_size, channels, height, width = images.shape
-        
-        shifts_x_pixels = (shifts_x * (width // 2)).int()
-        shifts_y_pixels = (shifts_y * (height // 2)).int()
-
-        # Create the kernels
-        kernels = torch.zeros((batch_size, channels, height, width)).to(images.device)
-
-        for i in range(batch_size):
-            shift_x = shifts_x_pixels[i].item()
-            shift_y = shifts_y_pixels[i].item()
-            
-            kernels[i, :, (height // 2) + shift_y, (width // 2) + shift_x] = 1
-
-        # flip kernel
-        kernels_flipped = flip_tensor(kernels)
-        # Perform the convolution - apply convolution to each channel separately
-        images_expanded = images.reshape(1, batch_size * channels, height, width)
-        kernels_expanded = kernels_flipped.view(batch_size * channels, 1, height, width)
-        shifted_images = F.conv2d(
-            input=images_expanded, 
-            weight=kernels_expanded, 
-            stride=1, 
-            padding='same', 
-            groups=batch_size * channels).view(batch_size, channels, height, width)
-
-        return shifted_images
-
-    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, return_pred_indices=False):
+    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, zoom_mult=None):
         """
         Forward pass of the autoencoder model.
         
@@ -402,7 +346,7 @@ class PoseAutoencoder(AutoencoderKL):
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
         apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
-        assert apply_manual_crop "manual crop experiment only in vanilla autoencoder"
+        assert apply_manual_crop, "manual crop experiment only in vanilla autoencoder"
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -428,34 +372,16 @@ class PoseAutoencoder(AutoencoderKL):
             
         if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
             pred_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
-        
-        z_obj_pose = z_obj
-        
-        if not apply_manual_shift:
-            # Replace pose with other pose if supervised with other patch
-            if second_pose is not None:
-                gen_pose = second_pose.to(pred_pose)
-            else:
-                gen_pose = pred_pose
-        else:
-            # Compute shift if shift between both patches
-            if second_pose is not None:
-                shift_x = second_pose[:, 0] - pose_gt[:, 0]
-                shift_y = second_pose[:, 1] - pose_gt[:, 1]
-                d_shift = shift_x.abs().sum() + shift_y.abs().sum() # Do not apply shift layer if shift is 0
-            else:
-                shift_x, shift_y = torch.zeros_like(pose_gt[:, 0]), torch.zeros_like(pose_gt[:, 0])
-                d_shift = torch.tensor([0.0])
-        
+                
         if apply_manual_crop:
             assert zoom_mult is not None, "zoom_mult is not specified, aka None"
 
         # Apply crop in latent space
         if self.apply_conv_crop_latent_space:
-            z_obj_pose = self.manual_crop(z_obj_pose, zoom_mult)
+            z_obj = self.manual_crop(z_obj, zoom_mult)
         
         # Predict images from object and pose latents
-        pred_obj = self.decode(z_obj_pose) # torch.Size([4, 3, 256, 256])
+        pred_obj = self.decode(z_obj) # torch.Size([4, 3, 256, 256])
         
         # Apply crop in image space
         if self.apply_conv_crop_img_space:
@@ -464,7 +390,7 @@ class PoseAutoencoder(AutoencoderKL):
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
     def batch_center_crop_resize(self, images, H_crops, W_crops):
-        batch_size, channels, H, W = images.shape # torch.Size([4, 3, 256, 256])
+        batch_size, _, H, W = images.shape # torch.Size([4, 3, 256, 256])
         cropped_resized_images = torch.zeros_like(images) # torch.Size([4, 3, 256, 256])
         resizer = T.Resize(size=(H, W),interpolation=T.InterpolationMode.BILINEAR)
         for i in range(batch_size):
@@ -478,7 +404,7 @@ class PoseAutoencoder(AutoencoderKL):
         return cropped_resized_images
     
     def manual_crop(self, images, zoom_mult):
-        batch_size, channels, H, W = images.shape
+        _, _, H, W = images.shape
         
         H_crops = (H * zoom_mult).long()
         W_crops = (W * zoom_mult).long()
@@ -592,7 +518,7 @@ class PoseAutoencoder(AutoencoderKL):
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True, zoom_mult=zoom_mult)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
         
         self.log("dropout_prob", self.dropout_prob, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.iter_counter += 1
@@ -636,15 +562,15 @@ class PoseAutoencoder(AutoencoderKL):
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, return_pred_indices=True, zoom_mult=zoom_mult)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
         
         _, log_dict_ae = self.loss(rgb_gt, segm_mask_gt, pose_gt,
-                                      pred_obj, dec_pose,
-                                      class_gt, class_gt_label, bbox_gt,fill_factor_gt,
-                                      posterior_obj, bbox_posterior, 0, 
-                                      global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
-                                      last_layer=self.get_last_layer(), split="val",
-                                      q_loss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
+                                    pred_obj, dec_pose,
+                                    class_gt, class_gt_label, bbox_gt,fill_factor_gt,
+                                    posterior_obj, bbox_posterior, 0, 
+                                    global_step=self.iter_counter, mask_2d_bbox=mask_2d_bbox,
+                                    last_layer=self.get_last_layer(), split="val",
+                                    q_loss=q_loss, predicted_indices_obj=ind_obj, predicted_indices_pose=ind_pose)
 
         _, log_dict_disc = self.loss(rgb_gt, segm_mask_gt, pose_gt,
                                         pred_obj, dec_pose,
@@ -660,14 +586,7 @@ class PoseAutoencoder(AutoencoderKL):
         self.log_dict(log_dict_disc)
         return self.log_dict
     
-    def test_step(self, batch, batch_idx):
-        # TODO: Move to init
-        self.chunk_size = 128
-        self.class_thresh = 0.3 # TODO: Set to 0.5 or other value that works on val set
-        self.fill_factor_thresh = 0.5 # TODO: Set to 0.5 or other value that works on val set
-        self.num_refinement_steps = 10
-        self.ref_lr=1.0e0
-        
+    def test_step(self, batch, batch_idx):        
         # Prepare Input
         input_patches = batch[self.image_rgb_key].to(self.device) # torch.Size([B, 3, 256, 256])
         assert input_patches.dim() == 4 or (input_patches.dim() == 5 and input_patches.shape[0] == 1), f"Only supporting batch size 1. Input_patches shape: {input_patches.shape}"
@@ -702,17 +621,15 @@ class PoseAutoencoder(AutoencoderKL):
         all_z_objects = torch.cat(all_objects)
         all_z_poses = torch.cat(all_poses)
         patches_w_objs = input_patches[all_patch_indeces]
-        dec_pose_refined = self._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
-        
         # TODO: save everything to an output file!
-        return dec_pose_refined
+        return self._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
     
     def _get_valid_patches(self, input_patches, global_patch_index):
         local_patch_idx = torch.arange(len(global_patch_index))
         # Run encoder
-        posterior_obj, pose_feat, q_loss, (_,_,ind_obj), (_,_,ind_pose) = self.encode(input_patches)
+        posterior_obj, pose_feat, _, (_,_,_), (_,_,_) = self.encode(input_patches)
         z_obj = posterior_obj.mode()
-        dec_pose, bbox_posterior  = self.decode_pose(pose_feat, sample_posterior=False)
+        dec_pose, _  = self.decode_pose(pose_feat, sample_posterior=False)
         
         # Threshold by class probabilities
         # TODO: Check class probabilities after sofmax
@@ -777,14 +694,10 @@ class PoseAutoencoder(AutoencoderKL):
         for k in range(self.num_refinement_steps):
             dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
             optim_refined.zero_grad()
-            enc_pose = self.encode_pose(dec_pose)
-            z_obj_pose = z_obj + enc_pose
-            gen_image = self.decode(z_obj_pose)
+            gen_image = self.decode(z_obj)
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
             rec_loss.backward()
             optim_refined.step()
-            # print("Gradient: ", refined_pose_param.grad.mean(), refined_pose_param.grad.std())
-            # print("Poses: ", refined_pose_param.mean(), refined_pose_param.std())
         if True: # TODO: for debug only 
             refined_pose = torch.cat([refined_pose_chosen, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
@@ -796,12 +709,12 @@ class PoseAutoencoder(AutoencoderKL):
     def configure_optimizers(self):
         lr = self.learning_rate
         opt_ae_params = list(self.encoder.parameters())+ \
-                                  list(self.decoder.parameters())+ \
-                                  list(self.quant_conv_obj.parameters())+ \
-                                  list(self.quant_conv_pose.parameters())+ \
-                                  list(self.post_quant_conv.parameters())+ \
-                                  list(self.pose_encoder.parameters())+ \
-                                  list(self.pose_decoder.parameters())
+                        list(self.decoder.parameters())+ \
+                        list(self.quant_conv_obj.parameters())+ \
+                        list(self.quant_conv_pose.parameters())+ \
+                        list(self.post_quant_conv.parameters())+ \
+                        list(self.pose_encoder.parameters())+ \
+                        list(self.pose_decoder.parameters())
         if hasattr(self, 'quantize_obj'):
             opt_ae_params = opt_ae_params + list(self.quantize_obj.parameters())
         
@@ -809,7 +722,7 @@ class PoseAutoencoder(AutoencoderKL):
             opt_ae_params = opt_ae_params + list(self.quantize_pose.parameters())
 
         opt_ae = torch.optim.Adam(opt_ae_params,
-                                  lr=lr, betas=(0.5, 0.9))
+                                lr=lr, betas=(0.5, 0.9))
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
 
@@ -824,13 +737,13 @@ class PoseAutoencoder(AutoencoderKL):
         pose_6d_perturbed_ret[:, 3] = pose_6d_perturbed_v3 # torch.Size([4, 8])
         assert pose_6d_perturbed_ret.shape == dec_pose.shape, f"pose_6d_perturbed_ret shape: {pose_6d_perturbed_ret.shape}"
         return pose_6d_perturbed_ret.to(self.device) # torch.Size([4, 8])
- 
+
     def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace, zoom_mult):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
 
-        xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
-        xrec, poserec, posterior_obj, bbox_posterior, q_loss, _, _ = self.forward(rgb_in, pose_gt, zoom_mult=zoom_mult)
+        xrec_2, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
+        xrec, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, zoom_mult=zoom_mult)
         
         xrec_rgb = xrec[:, :3, :, :] # torch.Size([8, 3, 64, 64])
         xrec_rgb_2 = xrec_2[:, :3, :, :] # torch.Size([8, 3, 64, 64])
@@ -844,22 +757,22 @@ class PoseAutoencoder(AutoencoderKL):
             xrec_rgb_2 = self.to_rgb(xrec_rgb_2)
             
         # scale is 0, 1. scale to -1, 1
-        log["reconstructions_rgb" + namespace] = xrec_rgb.clone().detach()
-        log["reconstructions_rgb_2" + namespace] = xrec_rgb_2.clone().detach()
+        log[f"reconstructions_rgb{namespace}"] = xrec_rgb.clone().detach()
+        log[f"reconstructions_rgb_2{namespace}"] = xrec_rgb_2.clone().detach()
 
         # log = self.log_perturbed_poses(second_pose, rgb_in, pose_gt, rgb_in_viz, log)
 
         return log
     
-    def log_perturbed_poses(self, second_pose, rgb_in, pose_gt, rgb_in_viz, log):
+    def log_perturbed_poses(self, second_pose, rgb_in, pose_gt, rgb_in_viz, log, num_steps=5):
         # test different x and y values in range -1, 1 (along a diagonal)
-        x = torch.linspace(-1, 1, steps=5) # torch.Size([5])
-        y = torch.linspace(-1, 1, steps=5) # torch.Size([5])
+        x = torch.linspace(-1, 1, steps=num_steps) # torch.Size([5])
+        y = torch.linspace(-1, 1, steps=num_steps) # torch.Size([5])
 
-        second_pose_xy_list = []
-        for i in range(5):
-            for j in range(5):
-                second_pose_xy_list.append(torch.tensor([x[i], y[j]]))
+        second_pose_xy_list = [None] * (num_steps * num_steps)
+        for i, j in itertools.product(range(num_steps), range(num_steps)):
+            second_pose_xy_list[i*num_steps + j] = torch.tensor([x[i], y[j]])
+
         second_pose_xy = torch.stack(second_pose_xy_list).to(self.device) # torch.Size([25, 2])
         # replace the x and y values in the second pose with the new values
         second_pose = second_pose.clone() # torch.Size([3, 13])
@@ -876,7 +789,7 @@ class PoseAutoencoder(AutoencoderKL):
         for idx, snd_pose in enumerate(second_pose):
             # torch.Size([1, 4])
             snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
-            xrec_2, poserec_2, posterior_obj_2, bbox_posterior_2, q_loss, _, _ = self.forward(rgb_in, pose_gt, second_pose=snd_pose, zoom_mult=zoom_mult)
+            xrec_2, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, second_pose=snd_pose, zoom_mult=zoom_mult)
             xrec_rgb_2 = xrec_2[:, :3, :, :]    
 
             if rgb_in_viz.shape[1] > 3:
@@ -892,8 +805,7 @@ class PoseAutoencoder(AutoencoderKL):
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
 
-        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult \
-            = self.get_all_inputs(batch)
+        rgb_in, rgb_gt, pose_gt, _, _, _, _, _, _, _, _ = self.get_all_inputs(batch)
         
         rgb_in_viz = self._rescale(rgb_in)
         rgb_gt_viz = self._rescale(rgb_gt)
@@ -911,8 +823,6 @@ class PoseAutoencoder(AutoencoderKL):
     
     def _rescale(self, x):
         # scale is -1
-        x_min = 0.
-        x_max = 1.
         return 2. * (x - x.min()) / (x.max() - x.min()) - 1.
     
     def to_rgb(self, x):
@@ -920,50 +830,48 @@ class PoseAutoencoder(AutoencoderKL):
             self.register_buffer("colorize", torch.randn(3, x.shape[1], 1, 1).to(x))
         x = F.conv2d(x, weight=self.colorize)
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
-        # clip to [0, 1]
-        # x = torch.clamp(x, 0., 1.)
-        # x = (2. * x) - 1.
         return x
 
-
+    def _get_tv_loss(self, x, reduction='sum', weight=1e0):
+        return total_variation(x, reduction=reduction) * weight
 
 class AdaptivePoseAutoencoder(PoseAutoencoder):
     def __init__(self,
-                 ddconfig,
-                 lossconfig,
-                 embed_dim,
-                 ckpt_path=None,
-                 ignore_keys=[],
-                 image_mask_key=None,
-                 image_rgb_key="patch",
-                 pose_key="pose_6d",
-                 fill_factor_key="fill_factor",
-                 pose_perturbed_key="pose_6d_perturbed",
-                 class_key="class_id",
-                 bbox_key="bbox_sizes",
-                 colorize_nlabels=None,
-                 monitor=None,
-                 pose_decoder_config=None,
-                 pose_encoder_config=None,
-                 dropout_prob_init=1.0,
-                 dropout_prob_final=0.7,
-                 dropout_warmup_steps=5000,
-                 pose_conditioned_generation_steps=10000,
-                 perturb_rad_warmup_steps=100000,
-                 intermediate_img_feature_leak_steps=0,
-                 add_noise_to_z_obj=False,
-                 train_on_yaw=True,
-                 ema_decay=0.999,
-                 apply_conv_crop_img_space=False,
-                 apply_conv_crop_latent_space=False,
-                 apply_convolutional_shift_img_space=False,
-                 apply_convolutional_shift_latent_space=False,
-                 quantconfig=None,
-                 quantize_obj=False,
-                 quantize_pose=False,
-                 decoder_mid_adaptive=True,
-                 **kwargs
-                 ):
+                ddconfig,
+                lossconfig,
+                embed_dim,
+                ckpt_path=None,
+                ignore_keys=[],
+                image_mask_key=None,
+                image_rgb_key="patch",
+                pose_key="pose_6d",
+                fill_factor_key="fill_factor",
+                pose_perturbed_key="pose_6d_perturbed",
+                class_key="class_id",
+                bbox_key="bbox_sizes",
+                colorize_nlabels=None,
+                monitor=None,
+                pose_decoder_config=None,
+                pose_encoder_config=None,
+                dropout_prob_init=1.0,
+                dropout_prob_final=0.7,
+                dropout_warmup_steps=5000,
+                pose_conditioned_generation_steps=10000,
+                perturb_rad_warmup_steps=100000,
+                intermediate_img_feature_leak_steps=0,
+                add_noise_to_z_obj=False,
+                train_on_yaw=True,
+                ema_decay=0.999,
+                apply_conv_crop_img_space=False,
+                apply_conv_crop_latent_space=False,
+                apply_convolutional_shift_img_space=False,
+                apply_convolutional_shift_latent_space=False,
+                quantconfig=None,
+                quantize_obj=False,
+                quantize_pose=False,
+                decoder_mid_adaptive=True,
+                **kwargs
+                ):
         pl.LightningModule.__init__(self)
         
         # Inputs
@@ -993,10 +901,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             quantconfig["params"]["e_dim"] = embed_dim
             self.quantize_pose = instantiate_from_config(quantconfig)
 
-        if ddconfig["double_z"]:
-            mult_z = 2
-        else:
-            mult_z = 1
+        mult_z = 2 if ddconfig["double_z"] else 1
             
         self.quant_conv_obj = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], quant_conv_obj_embed_dim, 1)
         self.quant_conv_pose = torch.nn.Conv2d(mult_z*ddconfig["z_channels"], embed_dim, 1) # TODO: Need to fix the dimensions
@@ -1015,7 +920,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         self.feat_dims = [embed_dim, spatial_dim, spatial_dim]
         
         self.z_channels = ddconfig["z_channels"]
-        # enc_feat_dims = self._get_enc_feat_dims(ddconfig)
         
         pose_encoder_config["params"]["num_channels"] = ddconfig["z_channels"]
         pose_decoder_config["params"]["num_channels"] = ddconfig["z_channels"]
@@ -1089,10 +993,9 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
     
     def decode(self, z, pose):
         z = self.post_quant_conv(z)
-        dec = self.decoder(z, pose)
-        return dec
+        return self.decoder(z, pose)
 
-    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, return_pred_indices=False, zoom_mult=None):
+    def forward(self, input_im, pose_gt, sample_posterior=True, second_pose=None, zoom_mult=None):
         """
         Forward pass of the autoencoder model.
         
@@ -1106,8 +1009,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        # apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
-        # assert not apply_manual_crop, "dont apply manual crop in adaptive pose auto experiments"
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -1117,13 +1018,10 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             z_obj = posterior_obj
         else:
             # Sample from posterior distribution or use mode
-            if sample_posterior: # True
-                z_obj = posterior_obj.sample() # torch.Size([4, 16, 16, 16])
-            else:
-                z_obj = posterior_obj.mode()
+            z_obj = posterior_obj.sample() if sample_posterior else posterior_obj.mode()
                 
         # Extract pose information from pose features
-        pred_pose, bbox_posterior = self.decode_pose(pose_feat, sample_posterior=sample_posterior if not self.obj_quantization else False) # torch.Size([4, 8]), torch.Size([4, 7])
+        pred_pose, bbox_posterior = self.decode_pose(pose_feat, sample_posterior=False if self.obj_quantization else sample_posterior) # torch.Size([4, 8]), torch.Size([4, 7])
         
         # Dropout object feature latents
         self.dropout_prob = self._get_dropout_prob()
@@ -1135,27 +1033,10 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             pred_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
             
         # Replace pose with other pose if supervised with other patch
-        if second_pose is not None:
-            gen_pose = second_pose.to(pred_pose)
-        else:
-            gen_pose = pred_pose
-
-        z_obj_pose = z_obj
-
-        # if apply_manual_crop:
-        #     assert zoom_mult is not None, "zoom_mult is not specified, aka None"
-
-        # # Apply crop in latent space
-        # if self.apply_conv_crop_latent_space:
-        #     z_obj_pose = self.manual_crop(z_obj_pose, zoom_mult)
+        gen_pose = pred_pose if second_pose is None else second_pose.to(pred_pose)
 
         # Predict images from object and pose latents
-        pred_obj = self.decode(z_obj_pose, gen_pose) # torch.Size([4, 3, 256, 256])
-        
-        # # Apply crop in image space
-        # if self.apply_conv_crop_img_space:
-        #     pred_obj = self.manual_crop(pred_obj, zoom_mult)
-                    
+        pred_obj = self.decode(z_obj, gen_pose) # torch.Size([4, 3, 256, 256])             
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
     @torch.enable_grad()
@@ -1187,7 +1068,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
 
         # Run K iter refinement steps
         for k in range(self.num_refinement_steps):
-            if True:
+            if True: # TODO: for debug only
                 refined_pose_param_with_rest = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
                 dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
             else:
@@ -1195,10 +1076,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             x_list[k] = refined_pose_param[:, 0].clone().squeeze()
             y_list[k] = refined_pose_param[:, 1].clone().squeeze()
             optim_refined.zero_grad()
-            enc_pose = self.encode_pose(dec_pose)
-            z_obj_pose = z_obj + enc_pose
             gen_pose = dec_pose
-            gen_image = self.decode(z_obj_pose, gen_pose)
+            gen_image = self.decode(z_obj, gen_pose)
             rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
             tv_loss = self._get_tv_loss(gen_image, weight=self.tv_loss_weight)
             refinement_loss = rec_loss + tv_loss
@@ -1214,7 +1093,3 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
         return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list
-
-    def _get_tv_loss(self, x, reduction='sum', weight=1e0):
-        tv_loss = total_variation(x, reduction=reduction) * weight
-        return tv_loss

@@ -1,58 +1,56 @@
 # src/data/waymo.py
-import torch
-import torch.nn as nn
-from mmdet3d.registry import DATASETS
-from mmdet3d.datasets.waymo_dataset import WaymoDataset as MMDetWaymoDataset
-from torch.utils.data import Dataset
-from src.util.misc import EasyDict as edict
 import os
-from src.util.cameras import PatchPerspectiveCameras as PatchCameras
-from src.util.cameras import z_world_to_learned
-from pytorch3d.transforms import euler_angles_to_matrix, matrix_to_euler_angles, se3_log_map, se3_exp_map
-import torchvision.transforms as T
-from PIL import Image as Image
-from PIL.Image import Resampling
-import numpy as np
 import logging
 import math
-import torchvision.ops as ops
-from torchvision.transforms.functional import pil_to_tensor
-import torch.nn.functional as F
 import random
 import pickle as pkl
-from src.util.conversion_to_world import get_world_coord_decoded_pose
-from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM
+import numpy as np
+import torch
+from PIL import Image
+from PIL.Image import Resampling
+from mmdet3d.registry import DATASETS
+from mmdet3d.datasets.waymo_dataset import WaymoDataset as MMDetWaymoDataset
+from pytorch3d.transforms import euler_angles_to_matrix, se3_log_map
+import torchvision.transforms as T
+import torchvision.ops as ops
+from torchvision.transforms.functional import pil_to_tensor
+from src.util.misc import EasyDict as edict
+from src.util.cameras import PatchPerspectiveCameras as PatchCameras
+from src.util.cameras import z_world_to_learned
+from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM
+
 
 CAM_NAMESPACE = 'CAM'
 CAMERAS = ["FRONT", "FRONT_RIGHT", "FRONT_LEFT", "SIDE_LEFT", "SIDE_RIGHT"]
 CAMERA_NAMES = [f"{CAM_NAMESPACE}_{camera}" for camera in CAMERAS]
 CAM_NAME2CAM_ID = {cam_name: i for i, cam_name in enumerate(CAMERA_NAMES)}
-CAM_ID2CAM_NAME = {i: cam_name for i, cam_name in enumerate(CAMERA_NAMES)}
+CAM_ID2CAM_NAME = dict(enumerate(CAMERA_NAMES))
 
 Z_NEAR = 0.01
-Z_FAR = 60.0
+Z_FAR = 60.0 #TODO: Change!
 
-WAYMO_IMG_WIDTH = 1600
-WAYMO_IMG_HEIGHT = 900
+WAYMO_IMG_WIDTH = 1600 #TODO: Change!
+WAYMO_IMG_HEIGHT = 900 #TODO: Change!
 
-PATCH_ANCHOR_SIZES = [50, 100, 200, 400]
+PATCH_ANCHOR_SIZES = [50, 100, 200, 400] #TODO: Change!
 
 class WaymoBase(MMDetWaymoDataset):
+
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
-                 is_sweep=False, perturb_center=True, perturb_scale=False, 
-                 negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
-                 perturb_prob=0.0, patch_center_rad_init=0.5, 
-                 perturb_yaw=False, allow_zoomout=False,
+                is_sweep=False, perturb_center=True, perturb_scale=False, 
+                negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
+                perturb_prob=0.0, patch_center_rad_init=0.5, 
+                perturb_yaw=False, allow_zoomout=False,
                  **kwargs):
         # Setup directory
         self.data_root = data_root
-        self.img_root = os.path.join(data_root, "samples" if not is_sweep else "sweeps")
+        self.img_root = os.path.join(data_root, "sweeps" if is_sweep else "samples")
         super().__init__(data_root=data_root, **kwargs)
         # Setup class labels and ids
         self.label_names = label_names
         self.allow_zoomout = allow_zoomout
         self.label_ids = [LABEL_NAME2ID[label_name] for label_name in LABEL_NAME2ID.keys() if label_name in label_names]
-        logging.info(f"Using label names: {self.label_names}, label ids: {self.label_ids}")
+        logging.info("Using label names: %s, label ids: %s", self.label_names, self.label_ids)
         # Setup patch
         self.patch_aspect_ratio = patch_aspect_ratio
         self.patch_size_return = (patch_height, int(patch_height * patch_aspect_ratio)) # aspect ratio is width/height
@@ -136,8 +134,7 @@ class WaymoBase(MMDetWaymoDataset):
         # Set the area inside the bounding box to True
         mask_bool[pixel_delta[1]:patch.size[1]+pixel_delta[3], pixel_delta[0]:patch.size[0]+pixel_delta[2]] = 1
         mask_pil = Image.fromarray(mask_bool)
-        mask = mask_pil.resize((self.patch_size_return[0], self.patch_size_return[1]), resample=Resampling.NEAREST, reducing_gap=1.0)
-        return mask
+        return mask_pil.resize((self.patch_size_return[0], self.patch_size_return[1]), resample=Resampling.NEAREST, reducing_gap=1.0)
     
     def _get_instance_patch(self, img_path, cam_instance):
         # return croped list of images as defined by 2d bbox for each instance
@@ -186,7 +183,7 @@ class WaymoBase(MMDetWaymoDataset):
          
         return patch_resized_tensor, patch_center_2d, patch_size_anchor, resampling_factor, padding_pixels_resampled, mask
      
-    def compute_z_crop(self, H, H_crop, x, y, z, x_crop, y_crop, multiplier, eps=1e-8):
+    def compute_z_crop(self, H, H_crop, x, y, z, multiplier, eps=1e-8):
         
         obj_dist_sq = x**2 + y**2 + z**2
         obj_dist = torch.sqrt(abs(obj_dist_sq + eps)).squeeze()
@@ -225,11 +222,8 @@ class WaymoBase(MMDetWaymoDataset):
 
         m_min, m_max = self.get_min_max_multipliers(patch_size_original)
         
-        max_zoom_mult = max(max(x, y), m_min) # since each anchor is 2x the previous
-        if self.allow_zoomout:
-            min_zoom_mult = m_max # zero pad on zooming out... 
-        else:
-            min_zoom_mult = 1.0 # no zoomout
+        max_zoom_mult = max(x, y, m_min) # since each anchor is 2x the previous
+        min_zoom_mult = m_max if self.allow_zoomout else 1.0 # no zoomout
 
         if np.random.rand() < p:
             # Sample from a uniform distribution
@@ -246,7 +240,7 @@ class WaymoBase(MMDetWaymoDataset):
         H_crop = H * multiplier
         W_crop = H_crop * self.patch_aspect_ratio
 
-        z_crop = self.compute_z_crop(H, H_crop, x, y, z, x_crop, y_crop, multiplier)
+        z_crop = self.compute_z_crop(H, H_crop, x, y, z, multiplier)
         fill_factor_cropped = fill_factor * multiplier 
         center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
         original_crop_recropped = center_cropper(original_crop) 
@@ -274,11 +268,12 @@ class WaymoBase(MMDetWaymoDataset):
         if len(patch_center_2d) == 2:
             # add batch dimension
             patch_center_2d = torch.tensor(patch_center_2d, dtype=torch.float32).unsqueeze(0)
-       
+        
         object_centroid_3D = torch.tensor(object_centroid_3D, dtype=torch.float32).reshape(1, 1, 3)
         
-        assert object_centroid_3D.dim() == 3 or object_centroid_3D.dim() == 2, f"object_centroid_3D dim is {object_centroid_3D.dim()}"
-        assert isinstance(object_centroid_3D, torch.Tensor), f"object_centroid_3D is not a torch tensor"
+
+        assert object_centroid_3D.dim() in [3, 2], f"object_centroid_3D dim is {object_centroid_3D.dim()}"        
+        assert isinstance(object_centroid_3D, torch.Tensor), "object_centroid_3D is not a torch tensor"
 
         point_patch_ndc = camera.transform_points_patch_ndc(points=object_centroid_3D,
                                                             patch_size=cam_instance.patch_size, # add delta
@@ -301,7 +296,6 @@ class WaymoBase(MMDetWaymoDataset):
         z_world = z
         
         def get_zminmax(min_val, max_val, focal_length, patch_height):
-            # TODO: need to account for fill factor
             zmin = -(min_val * focal_length.squeeze()[0]) / (patch_height - padding_pixels_resampled)
             zmax = -(max_val * focal_length.squeeze()[0]) / (patch_height - padding_pixels_resampled)
             return zmin, zmax
@@ -312,11 +306,11 @@ class WaymoBase(MMDetWaymoDataset):
         max_val = self.hmax_dict[bbox_label_name]
         
         zmin, zmax = get_zminmax(min_val=min_val, max_val=max_val, 
-                                 focal_length=camera.focal_length, 
-                                 patch_height=self.patch_size_return[0])
+                                focal_length=camera.focal_length, 
+                                patch_height=self.patch_size_return[0])
         
         z_learned = z_world_to_learned(z_world=z_world, zmin=zmin, zmax=zmax, 
-                                       patch_resampling_factor=cam_instance.resampling_factor[0])
+                                    patch_resampling_factor=cam_instance.resampling_factor[0])
         
         if point_patch_ndc.dim() == 3:
             point_patch_ndc = point_patch_ndc.view(-1)
@@ -396,14 +390,15 @@ class WaymoBase(MMDetWaymoDataset):
             y_shifted = np.random.normal(loc=0, scale=max_y_shift / 4)
         
         # Perturbed center coordinates
-        assert not math.isnan(center_x)
-        x_shifted = 0.0 if math.isnan(x_shifted) else x_shifted
-        shifted_center_x = int(center_x + x_shifted)
-        assert not math.isnan(center_y)
-        y_shifted = 0.0 if math.isnan(y_shifted) else y_shifted
-        shifted_center_y = int(center_y + y_shifted)
-        
+        shifted_center_x = self._get_shifted_coord(center_x, x_shifted)
+        shifted_center_y = self._get_shifted_coord(center_y, y_shifted) 
         return [shifted_center_x, shifted_center_y]
+
+    def _get_shifted_coord(self, center, shifted):
+        # Perturbed center coordinates
+        assert not math.isnan(center)
+        shifted = 0.0 if math.isnan(shifted) else shifted
+        return int(center + shifted)
     
     def _get_patchGT(self, cam_instance, img_path, cam2img, postfix=""):
         cam_instance = edict(cam_instance)
@@ -438,7 +433,6 @@ class WaymoBase(MMDetWaymoDataset):
         
         # make 4x4 matrix from 3x3 camera matrix
         K = torch.zeros(4, 4, dtype=torch.float32)
-        
         K[:3, :3] = torch.tensor(cam2img, dtype=torch.float32)
         
         K[2, 2] = 0.0
@@ -461,12 +455,12 @@ class WaymoBase(MMDetWaymoDataset):
         
         # Update Cam Instance with new patch and center_2d
         cam_instance.update({'patch': patch,
-                             'patch_center': patch_center_2d,
-                             'center_2d': patch_center_2d,
-                             'patch_size': patch_size_original,
-                             'resampling_factor': resampling_factor,
-                             'fill_factor': fill_factor,
-                             'mask_2d_bbox': mask_2d_bbox})
+                            'patch_center': patch_center_2d,
+                            'center_2d': patch_center_2d,
+                            'patch_size': patch_size_original,
+                            'resampling_factor': resampling_factor,
+                            'fill_factor': fill_factor,
+                            'mask_2d_bbox': mask_2d_bbox})
         
         pose_6d, bbox_sizes, yaw, debug_patch_img = self._get_pose_6d_lhw(camera, cam_instance)
         if debug_patch_img is not None and self.DEBUG:
@@ -481,8 +475,8 @@ class WaymoBase(MMDetWaymoDataset):
             fill_factor = float(fill_factor_new)
             
             cam_instance.update({'patch': patch,
-                                 'fill_factor': fill_factor,
-                                 'mask_2d_bbox':mask_2d_bbox})
+                                'fill_factor': fill_factor,
+                                'mask_2d_bbox':mask_2d_bbox})
         
         cam_instance.zoom_multiplier = torch.tensor(zoom_multiplier).squeeze()
         
@@ -504,11 +498,13 @@ class WaymoBase(MMDetWaymoDataset):
         }
         
         # Extract Class ID
-        class_id = cam_instance.bbox_label
+        cam_instance = self._extract_class_id(cam_instance, cam_instance.bbox_label)
+        return cam_instance
+
+    def _extract_class_id(self, cam_instance, class_id):
         cam_instance.class_id = self.label_id2class_id[class_id]
         cam_instance.class_name = LABEL_ID2NAME[class_id]
         cam_instance.original_class_id = class_id
-        
         return cam_instance
 
     def get_background_patch(self, background_patch):
@@ -531,11 +527,7 @@ class WaymoBase(MMDetWaymoDataset):
         ret.mask_2d_bbox = mask_2d_bbox
         
         # Extract Class ID
-        class_id = LABEL_NAME2ID['background']
-        ret.class_id = self.label_id2class_id[class_id]
-        ret.class_name = LABEL_ID2NAME[class_id]
-        ret.original_class_id = class_id
-
+        ret = self._extract_class_id(ret, LABEL_NAME2ID['background'])
         return ret
     
     def __get_new_item__(self, idx):
@@ -588,7 +580,7 @@ class WaymoBase(MMDetWaymoDataset):
         
         if np.random.rand() <= (1. - self.negative_sample_prob):
             # Get a random crop of an instance with at least 50% overlap
-            if len(cam_instances) == 0:
+            if not cam_instances:
 
                 return self.__get_new_item__(idx)
             
@@ -615,7 +607,7 @@ class WaymoBase(MMDetWaymoDataset):
                                             img_path=os.path.join(self.img_root, cam_name, img_file),
                                             cam2img=sample_img_info.cam2img,
                                             postfix="_2")
-            ret.update({k+"_2": v for k,v in patch_obj_2.items()})
+            ret.update({f"{k}_2": v for k,v in patch_obj_2.items()})
             ret.bbox_3d_gt_2 = patch_obj_2.bbox_3d
             if patch_obj is None or patch_obj_2 is None:
                 return self.__get_new_item__(idx)
@@ -665,14 +657,14 @@ class WaymoBase(MMDetWaymoDataset):
                 return self.__get_new_item__(idx)
 
             ret.update(background_patch_dict)
-            ret.update({k + "_2": v for k, v in background_patch_dict.items()})
+            ret.update({f"{k}_2": v for k, v in background_patch_dict.items()})
 
             patch_center_2d = torch.tensor(center_2d).float()
             ret.patch_center_2d = patch_center_2d
             
         for key in ["cam_name", "img_path", "sample_data_token", "cam2img", "cam2ego", "class_name", "bbox_3d_gt_2", "lidar2cam", "bbox_3d_gt", "resampling_factor", "resampling_factor_2", "device", "image_size"]:
             value = ret[key]
-            if isinstance(value, list) or isinstance(value, tuple):
+            if isinstance(value, (list, tuple)):
                 ret[key] = torch.tensor(value, dtype=torch.float32)
         self.count += 1
         return ret
