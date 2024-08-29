@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 4.5e-6
-  target: src.models.autoencoder.PoseAutoencoder
+  target: src.models.autoencoder.AdaptivePoseAutoencoder
   params:
     monitor: "val/rec_loss"
     embed_dim: 16
@@ -10,14 +10,14 @@ model:
     dropout_prob_final: 0.0
     pose_conditioned_generation_steps: 0
     dropout_warmup_steps: 0
-    add_noise_to_z_obj: True
     train_on_yaw: True
+    decoder_mid_adaptive: True
     lossconfig:
       target: src.modules.losses.PoseLoss
       params:
         use_mask_loss: False
-        encoder_pretrain_steps: 10000
-        disc_start: 10000
+        encoder_pretrain_steps: 0
+        disc_start: 0
         kl_weight_obj: 1.0e-5
         kl_weight_bbox: 1.0e-2
         disc_weight: 0.5
@@ -29,12 +29,12 @@ model:
         mask_weight: 0
         mask_loss_fn: "l2"
         disc_in_channels: 3
-        num_classes: 1
+        num_classes: 5
         dataset_stats_path: "dataset_stats/combined/all.pkl"
     pose_decoder_config:
       target: src.modules.autoencodermodules.pose_decoder.PoseDecoderSpatialVAE
       params: 
-        num_classes: 1
+        num_classes: 5
         num_channels: 16
         n: 16
         m: 16
@@ -46,7 +46,7 @@ model:
     pose_encoder_config:
       target: src.modules.autoencodermodules.pose_encoder.PoseEncoderSpatialVAE
       params:
-        num_classes: 1
+        num_classes: 5
         num_channels: 16
         n: 16
         m: 16
@@ -56,7 +56,7 @@ model:
     ddconfig:
       double_z: True
       z_channels: 16
-      resolution: 64
+      resolution: 256
       in_channels: 3
       out_ch: 3
       ch: 128
@@ -87,12 +87,14 @@ data:
         test_mode: False
         with_velocity: False
         use_valid_flag: False
-        label_names: ['car']
+        label_names: ['car', 'truck', 'trailer', 'bus', 'construction_vehicle']
         patch_height: 256
         patch_aspect_ratio: 1.0
         perturb_center: True
-        perturb_scale: True
+        perturb_scale: False
         perturb_prob: 1.0
+        allow_zoomout: True
+        
     validation:
       target: src.data.datasets.nuscenes.NuScenesValidation
       params:
@@ -107,12 +109,13 @@ data:
         test_mode: False
         with_velocity: False
         use_valid_flag: False
-        label_names: ['car']
+        label_names: ['car', 'truck', 'trailer', 'bus', 'construction_vehicle']
         patch_height: 256
         patch_aspect_ratio: 1.0
-        perturb_center: True
-        perturb_scale: True
+        perturb_center: False
+        perturb_scale: False
         perturb_prob: 0.0
+        allow_zoomout: True
     test:
       target: src.data.datasets.nuscenes.NuScenesTest
       params:
@@ -127,12 +130,13 @@ data:
         test_mode: True
         with_velocity: False
         use_valid_flag: False
-        label_names: ['car']
+        label_names: ['car', 'truck', 'trailer', 'bus', 'construction_vehicle']
         patch_height: 256
         patch_aspect_ratio: 1.0
         perturb_center: False
         perturb_scale: False
         perturb_prob: 0.0
+        allow_zoomout: True
 
 lightning:
   callbacks:
@@ -142,7 +146,7 @@ lightning:
         batch_frequency: 5000
         max_images: 1
         increase_log_steps: True
-        disable_local_logging: False
+        disable_local_logging: True
 
     progress_bar:
       target: src.util.callbacks.TQDMProgressBar
@@ -156,7 +160,7 @@ lightning:
   trainer:
     accumulate_grad_batches: 1
     accelerator: gpu
-    max_epochs: 1000
+    max_epochs: 50
     strategy: ddp
     detect_anomaly: True
     precision: 32
