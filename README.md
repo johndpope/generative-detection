@@ -41,7 +41,7 @@ bash setup.sh
 git submodule update --init --recursive
 ```
 
-6. Install the Python package:
+7. Install the Python package:
 ```bash
 pip install -e .
 ```
