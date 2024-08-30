@@ -28,10 +28,10 @@ CAM_NAME2CAM_ID = {cam_name: i for i, cam_name in enumerate(CAMERA_NAMES)}
 CAM_ID2CAM_NAME = dict(enumerate(CAMERA_NAMES))
 
 Z_NEAR = 0.01
-Z_FAR = 60.0 #TODO: Change!
+Z_FAR = 75.0
 
-WAYMO_IMG_WIDTH = 1600 #TODO: Change!
-WAYMO_IMG_HEIGHT = 900 #TODO: Change!
+WAYMO_IMG_WIDTH = 1920 
+WAYMO_IMG_HEIGHT = 1280 
 
 PATCH_ANCHOR_SIZES = [50, 100, 200, 400]
 
