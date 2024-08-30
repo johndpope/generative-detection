@@ -466,10 +466,7 @@ class PoseAutoencoder(AutoencoderKL):
         # Get Class GT
         class_gt = self.get_class_input(batch, self.class_key).to(self.device) # torch.Size([4])
         class_gt_label = batch["class_name"]
-
-        zoom_mult = batch["zoom_multiplier"]
-
-            
+    
         # torch.Size([4, 3, 256, 256]), torch.Size([4, 8]), torch.Size([4, 16, 16, 16]), torch.Size([4, 7])
         if "pose_6d_2" in batch:
             # Replace RGB and Mask with second patch
@@ -491,11 +488,10 @@ class PoseAutoencoder(AutoencoderKL):
             # Replace Segmentation Mask
             segm_mask_gt = self.get_mask_input(batch, self.image_mask_key) # None
             segm_mask_gt = segm_mask_gt.to(self.device) if segm_mask_gt is not None else None
-            zoom_mult = batch["zoom_multiplier_2"]
         else:
             second_pose = None
             
-        return rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult
+        return rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose
     
     def _update_patch_center_rad(self):
         if self.iter_counter >= self.perturb_rad_warmup_steps:
@@ -512,11 +508,11 @@ class PoseAutoencoder(AutoencoderKL):
             self.log("perturb_rad", self.patch_center_rad, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         # Get inputs in right shape
-        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult \
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=batch["zoom_multiplier_2"])
         
         self.log("dropout_prob", self.dropout_prob, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.iter_counter += 1
@@ -556,11 +552,11 @@ class PoseAutoencoder(AutoencoderKL):
     def validation_step(self, batch, batch_idx):
         
         # Get inputs in right shape
-        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult \
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose \
             = self.get_all_inputs(batch)
         
         # Run full forward pass
-        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
+        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=batch["zoom_multiplier_2"])
         
         _, log_dict_ae = self.loss(rgb_gt, segm_mask_gt, pose_gt,
                                     pred_obj, dec_pose,
@@ -735,12 +731,12 @@ class PoseAutoencoder(AutoencoderKL):
         assert pose_6d_perturbed_ret.shape == dec_pose.shape, f"pose_6d_perturbed_ret shape: {pose_6d_perturbed_ret.shape}"
         return pose_6d_perturbed_ret.to(self.device) # torch.Size([4, 8])
 
-    def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace, zoom_mult):
+    def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace, zoom_mult_1, zoom_mult_2):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
 
-        xrec_2, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult)
-        xrec, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, zoom_mult=zoom_mult)
+        xrec_2, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, second_pose=second_pose, zoom_mult=zoom_mult_2)
+        xrec, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, zoom_mult=zoom_mult_1)
         
         xrec_rgb = xrec[:, :3, :, :] # torch.Size([8, 3, 64, 64])
         xrec_rgb_2 = xrec_2[:, :3, :, :] # torch.Size([8, 3, 64, 64])
@@ -757,52 +753,14 @@ class PoseAutoencoder(AutoencoderKL):
         log[f"reconstructions_rgb{namespace}"] = xrec_rgb.clone().detach()
         log[f"reconstructions_rgb_2{namespace}"] = xrec_rgb_2.clone().detach()
 
-        # log = self.log_perturbed_poses(second_pose, rgb_in, pose_gt, rgb_in_viz, log)
 
         return log
     
-    def log_perturbed_poses(self, second_pose, rgb_in, pose_gt, rgb_in_viz, log, num_steps=5):
-        # test different x and y values in range -1, 1 (along a diagonal)
-        x = torch.linspace(-1, 1, steps=num_steps) # torch.Size([5])
-        y = torch.linspace(-1, 1, steps=num_steps) # torch.Size([5])
-
-        second_pose_xy_list = [None] * (num_steps * num_steps)
-        for i, j in itertools.product(range(num_steps), range(num_steps)):
-            second_pose_xy_list[i*num_steps + j] = torch.tensor([x[i], y[j]])
-
-        second_pose_xy = torch.stack(second_pose_xy_list).to(self.device) # torch.Size([25, 2])
-        # replace the x and y values in the second pose with the new values
-        second_pose = second_pose.clone() # torch.Size([3, 13])
-        second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
-        batch_size = len(second_pose)
-        num_poses = second_pose_xy.shape[0]
-        # create tensor of dim 0 = 25 containing the second pose with the xy values in second_pose_xy
-        second_pose = second_pose.repeat(num_poses, 1, 1).permute(1, 0, 2) # torch.Size([3, 25, 13])
-        
-        # torch.Size([3, 25, 13])
-        second_pose[:, :, :2] = second_pose_xy # torch.Size([25, 13])
-        # second_pose = second_pose.unsqueeze(0) if second_pose.dim() == 1 else second_pose
-        second_pose = second_pose.reshape(num_poses, batch_size, -1)
-        for idx, snd_pose in enumerate(second_pose):
-            # torch.Size([1, 4])
-            snd_pose = snd_pose.unsqueeze(0) # torch.Size([1, 13])
-            xrec_2, _, _, _, _, _, _ = self.forward(rgb_in, pose_gt, second_pose=snd_pose, zoom_mult=zoom_mult)
-            xrec_rgb_2 = xrec_2[:, :3, :, :]    
-
-            if rgb_in_viz.shape[1] > 3:
-                # colorize with random projection
-                assert xrec_rgb_2.shape[1] > 3
-                xrec_rgb_2 = self.to_rgb(xrec_rgb_2)
-
-            log[f"reconstructions_rgb_2_{idx}"] = xrec_rgb_2.clone().detach()
-        return log
-        
-
     @torch.no_grad()
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
 
-        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose, zoom_mult = self.get_all_inputs(batch)
+        rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose = self.get_all_inputs(batch)
         
         rgb_in_viz = self._rescale(rgb_in)
         rgb_gt_viz = self._rescale(rgb_gt)
@@ -811,11 +769,11 @@ class PoseAutoencoder(AutoencoderKL):
         log["inputs_rgb_gt"] = rgb_gt_viz.clone().detach()
 
         if not only_inputs:
-            log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="", zoom_mult=zoom_mult)
+            log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="", zoom_mult_1=batch["zoom_multiplier"], zoom_mult_2=batch["zoom_multiplier_2"])
 
             # EMA weights visualization
             with self.ema_scope():
-                log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema", zoom_mult=zoom_mult)
+                log = self._log_reconstructions(rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace="_ema", zoom_mult_1=batch["zoom_multiplier"], zoom_mult_2=batch["zoom_multiplier_2"])
         return log
     
     def _rescale(self, x):
