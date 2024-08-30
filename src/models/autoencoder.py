@@ -23,10 +23,10 @@ from ldm.modules.ema import LitEma
 
 from src.modules.autoencodermodules.feat_encoder import FeatEncoder
 from src.modules.autoencodermodules.feat_decoder import FeatDecoder, AdaptiveFeatDecoder
-from src.modules.autoencodermodules.pose_encoder import PoseEncoderSpatialVAE as PoseEncoder
 from src.modules.autoencodermodules.pose_decoder import PoseDecoderSpatialVAE as PoseDecoder
 from src.util.distributions import DiagonalGaussianDistribution
 from src.util.misc import flip_tensor    
+from src.util.misc import ReflectPadCenterCrop
 from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM, POSE_6D_DIM, FILL_FACTOR_DIM, FINAL_PERTURB_RAD
 
 try:
@@ -62,7 +62,6 @@ class PoseAutoencoder(AutoencoderKL):
                 colorize_nlabels=None,
                 monitor=None,
                 pose_decoder_config=None,
-                pose_encoder_config=None,
                 dropout_prob_init=1.0,
                 dropout_prob_final=0.7,
                 dropout_warmup_steps=5000,
@@ -74,11 +73,10 @@ class PoseAutoencoder(AutoencoderKL):
                 ema_decay=0.999,
                 apply_conv_crop_img_space=False,
                 apply_conv_crop_latent_space=False,
-                apply_convolutional_shift_img_space=False,
-                apply_convolutional_shift_latent_space=False,
                 quantconfig=None,
                 quantize_obj=False,
                 quantize_pose=False,
+                latent_manual_crop_reflect_pad=False,
                 **kwargs
                 ):
         pl.LightningModule.__init__(self)
@@ -130,19 +128,15 @@ class PoseAutoencoder(AutoencoderKL):
         
         self.z_channels = ddconfig["z_channels"]
         
-        pose_encoder_config["params"]["num_channels"] = ddconfig["z_channels"]
         pose_decoder_config["params"]["num_channels"] = ddconfig["z_channels"]
         
         # Pose prediction and latent
         self.pose_decoder = instantiate_from_config(pose_decoder_config)
-        self.pose_encoder = instantiate_from_config(pose_encoder_config)
         
         # Decoder Setup
-        assert ~(apply_convolutional_shift_img_space and apply_convolutional_shift_latent_space), "Only one of the shift types (image or latent space) can be applied"
-        self.apply_conv_shift_img_space = apply_convolutional_shift_img_space
-        self.apply_conv_shift_latent_space = apply_convolutional_shift_latent_space
         self.apply_conv_crop_img_space = apply_conv_crop_img_space
         self.apply_conv_crop_latent_space = apply_conv_crop_latent_space
+        self.latent_manual_crop_reflect_pad = latent_manual_crop_reflect_pad
         assert not (self.apply_conv_crop_img_space and self.apply_conv_crop_latent_space), "Only one of the crop types (image or latent space) can be applied"
         self.decoder = FeatDecoder(**ddconfig)
         
@@ -378,38 +372,42 @@ class PoseAutoencoder(AutoencoderKL):
 
         # Apply crop in latent space
         if self.apply_conv_crop_latent_space:
-            z_obj = self.manual_crop(z_obj, zoom_mult)
+            latent_crop_pad_mode = "reflect" if self.latent_manual_crop_reflect_pad else "zero"
+            z_obj = self.manual_crop(z_obj, zoom_mult, crop_pad_mode=latent_crop_pad_mode)
         
         # Predict images from object and pose latents
         pred_obj = self.decode(z_obj) # torch.Size([4, 3, 256, 256])
         
         # Apply crop in image space
         if self.apply_conv_crop_img_space:
-            pred_obj = self.manual_crop(pred_obj, zoom_mult)
+            pred_obj = self.manual_crop(pred_obj, zoom_mult, crop_pad_mode="zero")
             
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
-    def batch_center_crop_resize(self, images, H_crops, W_crops):
+    def batch_center_crop_resize(self, images, H_crops, W_crops, crop_pad_mode="zero"):
+        assert crop_pad_mode in ["zero", "reflect"], f"crop_pad_mode should be either 'zero' or 'reflect', but got {crop_pad_mode}"
         batch_size, _, H, W = images.shape # torch.Size([4, 3, 256, 256])
         cropped_resized_images = torch.zeros_like(images) # torch.Size([4, 3, 256, 256])
         resizer = T.Resize(size=(H, W),interpolation=T.InterpolationMode.BILINEAR)
         for i in range(batch_size):
             H_crop = int(H_crops[i])
             W_crop = int(W_crops[i])
-
-            center_cropper = T.CenterCrop(size=(H_crop, W_crop))
+            if crop_pad_mode == "zero":
+                center_cropper = T.CenterCrop(size=(H_crop, W_crop))
+            elif crop_pad_mode == "reflect":
+                center_cropper = ReflectPadCenterCrop(size=(H_crop, W_crop))
             cropped_image = center_cropper(images[i].unsqueeze(0))
             cropped_resized_images[i] = resizer(cropped_image)
 
         return cropped_resized_images
     
-    def manual_crop(self, images, zoom_mult):
+    def manual_crop(self, images, zoom_mult, crop_pad_mode="zero"):
         _, _, H, W = images.shape
         
         H_crops = (H * zoom_mult).long()
         W_crops = (W * zoom_mult).long()
         
-        original_crop_recropped_resized = self.batch_center_crop_resize(images, H_crops, W_crops)
+        original_crop_recropped_resized = self.batch_center_crop_resize(images, H_crops, W_crops, crop_pad_mode=crop_pad_mode)
 
         return original_crop_recropped_resized
 
@@ -713,7 +711,6 @@ class PoseAutoencoder(AutoencoderKL):
                         list(self.quant_conv_obj.parameters())+ \
                         list(self.quant_conv_pose.parameters())+ \
                         list(self.post_quant_conv.parameters())+ \
-                        list(self.pose_encoder.parameters())+ \
                         list(self.pose_decoder.parameters())
         if hasattr(self, 'quantize_obj'):
             opt_ae_params = opt_ae_params + list(self.quantize_obj.parameters())
@@ -852,7 +849,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                 colorize_nlabels=None,
                 monitor=None,
                 pose_decoder_config=None,
-                pose_encoder_config=None,
                 dropout_prob_init=1.0,
                 dropout_prob_final=0.7,
                 dropout_warmup_steps=5000,
@@ -921,12 +917,10 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         
         self.z_channels = ddconfig["z_channels"]
         
-        pose_encoder_config["params"]["num_channels"] = ddconfig["z_channels"]
         pose_decoder_config["params"]["num_channels"] = ddconfig["z_channels"]
         
         # Pose prediction and latent
         self.pose_decoder = instantiate_from_config(pose_decoder_config)
-        self.pose_encoder = instantiate_from_config(pose_encoder_config)
         
         # Decoder Setup
         assert ~(apply_convolutional_shift_img_space and apply_convolutional_shift_latent_space), "Only one of the shift types (image or latent space) can be applied"

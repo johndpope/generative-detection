@@ -128,7 +128,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         
         return pose_loss, weighted_pose_loss, t1_loss, t2_loss, t3_loss, v3_loss
 
-    def _get_rec_loss(self, rgb_inputs, rgb_reconstructions, use_pixel_loss, mask_2d_bbox=None):
+    def _get_rec_loss(self, rgb_inputs, rgb_inputs_cropped, rgb_reconstructions, rgb_reconstructions_cropped, use_pixel_loss, mask_2d_bbox=None):
         # MSE RGB
         if use_pixel_loss:
             # Compute pixelwise reconstruction only inside 2d bbox
@@ -143,7 +143,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             
         # Perceptual loss
         if self.perceptual_weight > 0:
-            p_loss = self.perceptual_loss(rgb_inputs.contiguous(), rgb_reconstructions.contiguous()) # torch.Size([4, 1, 1, 1])
+            p_loss = self.perceptual_loss(rgb_inputs_cropped.contiguous(), rgb_reconstructions_cropped.contiguous()) # torch.Size([4, 1, 1, 1])
             if torch.sum(p_loss) > 100:
                 p_loss = 0.0
             rec_loss = rec_loss + self.perceptual_weight * p_loss # torch.Size([4, 3, 256, 256])
@@ -224,7 +224,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
     
     def _get_disc_input_rec(self, gt_obj, rgb_pred, rgb_gt):
         disc_inputs, reconstructions = gt_obj.clone(), rgb_pred # torch.Size([4, 3, 256, 256]), torch.Size([4, 3, 256, 256])
-        
+        reconstructions_cropped = reconstructions.clone()
         half_size = rgb_gt.shape[-1] //2
         half_border = (rgb_gt[..., :half_size, half_size-1:half_size].sum(1) == -3)
         border_size = half_border.sum(1).squeeze()
@@ -239,7 +239,9 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             border = border_size.item() if border_size.dim() == 0 else border_size[k]
             crop = crop_size.item() if crop_size.dim() == 0 else crop_size[k]
             disc_inputs[k] = resized_crop(disc, border, border, crop, crop, size=2*half_size)
-        return disc_inputs, reconstructions
+            reconstructions_cropped[k] = resized_crop(reconstructions[k], border, border, crop, crop, size=2*half_size)
+        
+        return disc_inputs, reconstructions, reconstructions_cropped
     
     def forward(self, 
                 rgb_gt, segm_mask_gt, pose_gt,
@@ -278,7 +280,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         if global_step <= (self.leak_img_info_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps):
             use_pixel_loss = False
 
-        disc_inputs, reconstructions = self._get_disc_input_rec(gt_obj, rgb_pred, rgb_gt)
+        disc_inputs, reconstructions, reconstructions_cropped = self._get_disc_input_rec(gt_obj, rgb_pred, rgb_gt)
 
         # if reconstructions have alpha channel, store it in mask
         if reconstructions.shape[1] == 4:
@@ -298,7 +300,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         # Compute segmentation loss
         mask_loss, weighted_mask_loss = self.get_mask_loss(segm_mask_gt, reconstructions_mask, mask_bg)
         # Compute reconstruction loss
-        rec_loss = self._get_rec_loss(disc_inputs, reconstructions, use_pixel_loss, mask_2d_bbox)
+        rec_loss = self._get_rec_loss(gt_obj, disc_inputs, reconstructions, reconstructions_cropped, use_pixel_loss, mask_2d_bbox)
         nll_loss, weighted_nll_loss = self._get_nll_loss(rec_loss, mask_bg, weights, reduction="sum")
         
         # Compute KL loss for VAE
