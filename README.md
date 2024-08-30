@@ -6,7 +6,9 @@ This repository is the official implementation of [OD-VAE: Inverting Generation 
 ![OD-VAE and Latent Variables of an 3D Object.](./figs/pipeline.png)
 
 [OD-VAE: Inverting Generation for 3D Object Detection]()
+
 [Anonymous Author(s)]()
+
 [Demo link]()
 
 ## Requirements
