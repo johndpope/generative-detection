@@ -15,7 +15,6 @@ import torchvision.transforms as T
 import torchvision.ops as ops
 from torchvision.transforms.functional import pil_to_tensor
 from src.util.misc import EasyDict as edict
-from src.util.misc import ReflectPadCenterCrop
 from src.util.cameras import PatchPerspectiveCameras as PatchCameras
 from src.util.cameras import z_world_to_learned
 from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM
@@ -278,7 +277,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         
         return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.95, crop_pad_mode="reflect"):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.95):
         
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
@@ -306,11 +305,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         z_crop = self.compute_z_crop(H, H_crop, x, y, z, multiplier)
         fill_factor_cropped = fill_factor * multiplier 
 
-        if crop_pad_mode == "reflect":
-            center_cropper = ReflectPadCenterCrop((int(H_crop), int(W_crop)))
-        else:
-            center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
-        
+        center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
         original_crop_recropped = center_cropper(original_crop) 
         resizer = T.Resize(size=(self.patch_size_return[0], self.patch_size_return[1]),interpolation=T.InterpolationMode.BILINEAR)
         original_crop_recropped_resized = resizer(original_crop_recropped)
