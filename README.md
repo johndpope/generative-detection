@@ -47,10 +47,10 @@ pip install -e .
 ```
 
 ## Prepare nuScenes Dataset [2]
-We use MMDetection3D as the base for our dataloader. Please follow the instructions given [here](https://mmdetection3d.readthedocs.io/en/latest/advanced_guides/datasets/nuscenes.html) download and prepare the nuScenes [2] dataset. Please place or symlink the directory with the prepared dataset at `data/nuscenes`.
+We use MMDetection3D as the base for our dataloader. Please follow the instructions given [here](https://mmdetection3d.readthedocs.io/en/latest/advanced_guides/datasets/nuscenes.html) to download and prepare the nuScenes [2] dataset. Please place or symlink the directory with the prepared dataset at `data/nuscenes`.
 
 ## Prepare the Waymo Open Dataset [3]
-We use MMDetection3D as the base for our dataloader. Please follow the instructions given [here](https://mmdetection3d.readthedocs.io/en/latest/advanced_guides/datasets/waymo.html) download and prepare the Waymo [3] dataset. Please place or symlink the directory with the prepared dataset at `data/waymo`.
+We use MMDetection3D as the base for our dataloader. Please follow the instructions given [here](https://mmdetection3d.readthedocs.io/en/latest/advanced_guides/datasets/waymo.html) to download and prepare the Waymo [3] dataset. Please place or symlink the directory with the prepared dataset at `data/waymo`.
 
 ## Training
 
