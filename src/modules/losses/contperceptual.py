@@ -228,11 +228,17 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         half_size = rgb_gt.shape[-1] //2
         half_border = (rgb_gt[..., :half_size, half_size-1:half_size].sum(1) == -3)
         border_size = half_border.sum(1).squeeze()
-        crop_size = (half_size - border_size)*2    
-        
-        for k, disc in enumerate(disc_inputs):
-            disc_inputs[k] = resized_crop(disc, border_size[k], border_size[k], crop_size[k], crop_size[k], size =2*half_size)
+        crop_size = (half_size - border_size) * 2
 
+        if border_size.dim() == 0:
+            print("border_size", border_size)
+            print("crop_size", crop_size)
+            print("gt_obj", gt_obj.shape)
+
+        for k, disc in enumerate(disc_inputs):
+            border = border_size.item() if border_size.dim() == 0 else border_size[k]
+            crop = crop_size.item() if crop_size.dim() == 0 else crop_size[k]
+            disc_inputs[k] = resized_crop(disc, border, border, crop, crop, size=2*half_size)
         return disc_inputs, reconstructions
     
     def forward(self, 
