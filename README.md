@@ -103,7 +103,7 @@ Our codebase for the architecture of training of the VAE builds heavily on the o
 
 ## BibTeX
 ```bibtex
-@article{citation_key,
+@article{anonymous_odvae_2024,
     author = Anonymous Authors,
     title = OD-VAE: Inverting Generation for 3D Object Detection,
     journal = {Journal Name},
