@@ -15,11 +15,9 @@ import torchvision.transforms as T
 import torchvision.ops as ops
 from torchvision.transforms.functional import pil_to_tensor
 from src.util.misc import EasyDict as edict
-from src.util.misc import ReflectPadCenterCrop
 from src.util.cameras import PatchPerspectiveCameras as PatchCameras
 from src.util.cameras import z_world_to_learned
-from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM
-
+from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE, POSE_DIM, LHW_DIM, BBOX_3D_DIM
 
 CAM_NAMESPACE = 'CAM'
 CAMERAS = ["FRONT", "FRONT_RIGHT", "FRONT_LEFT", "SIDE_LEFT", "SIDE_RIGHT"]
@@ -149,7 +147,6 @@ class WaymoBase(MMDetWaymoDataset):
         x2 = center_pixel_loc[0] + patch_size // 2
         y2 = center_pixel_loc[1] + patch_size // 2
         
-        is_corner_case = False
         # Handle Out of Bounds Edge Cases
         if x2 >= img_size[0] or y2 >= img_size[1] or x1 <= 0 or y1 <= 0:
             # Move patch back into image
@@ -160,8 +157,6 @@ class WaymoBase(MMDetWaymoDataset):
             y1 = y1 + delta_y
             x2 = x2 + delta_x
             y2 = y2 + delta_y
-            # Set to corner case to prevent further perturbations
-            is_corner_case = True
         
         patch_center_2d = (x1 + patch_size // 2, y1 + patch_size // 2)
         
@@ -229,6 +224,7 @@ class WaymoBase(MMDetWaymoDataset):
         if resampling_factor is None:
             a=0
         padding_pixels_resampled = padding_pixels * resampling_factor[0]
+        
         return patch_resized_tensor, patch_center_2d, patch_size_anchor, resampling_factor, padding_pixels_resampled, mask
     
     def compute_z_crop(self, H, H_crop, x, y, z, multiplier, eps=1e-8):
@@ -278,7 +274,7 @@ class WaymoBase(MMDetWaymoDataset):
         
         return m_min, m_max
     
-    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.95, crop_pad_mode="reflect"):
+    def get_perturbed_depth_crop(self, pose_6d, original_crop, fill_factor, patch_size_original, original_mask, p=0.95):
         
         x, y, z = pose_6d[:, 0], pose_6d[:, 1], pose_6d[:, 2]
         _, H, W = original_crop.shape
@@ -306,10 +302,10 @@ class WaymoBase(MMDetWaymoDataset):
         z_crop = self.compute_z_crop(H, H_crop, x, y, z, multiplier)
         fill_factor_cropped = fill_factor * multiplier 
 
-        if crop_pad_mode == "reflect":
-            center_cropper = ReflectPadCenterCrop((int(H_crop), int(W_crop)))
-        else:
             center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
+            center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
+        
+        center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
         
         original_crop_recropped = center_cropper(original_crop) 
         resizer = T.Resize(size=(self.patch_size_return[0], self.patch_size_return[1]),interpolation=T.InterpolationMode.BILINEAR)
@@ -543,8 +539,8 @@ class WaymoBase(MMDetWaymoDataset):
             fill_factor = float(fill_factor_new)
             
             cam_instance.update({'patch': patch,
-                                 'fill_factor': fill_factor,
-                                 'mask_2d_bbox':mask_2d_bbox})
+                                'fill_factor': fill_factor,
+                                'mask_2d_bbox':mask_2d_bbox})
         
         cam_instance.zoom_multiplier = torch.tensor(zoom_multiplier).squeeze()
         

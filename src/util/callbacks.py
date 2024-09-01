@@ -1,8 +1,9 @@
 # src/util/callbacks.py
 import os
 import time
-import numpy as np
 from pathlib import Path
+import logging
+import numpy as np
 import torch
 import torchvision
 from PIL import Image
@@ -10,7 +11,6 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor, TQDMProgressBar, DeviceStatsMonitor
 from pytorch_lightning.utilities import rank_zero_only, rank_zero_info
 from omegaconf import OmegaConf
-import logging
 
 class SetupCallback(Callback):
     """Setup callback for the project. This callback is responsible for creating the

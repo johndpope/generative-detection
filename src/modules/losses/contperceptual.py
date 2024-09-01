@@ -1,16 +1,14 @@
 # src/modules/losses/contperceptual.py
-import torch.nn as nn
-from ldm.modules.losses.contperceptual import LPIPSWithDiscriminator as LPIPSWithDiscriminator_LDM
-from src.util.distributions import DiagonalGaussianDistribution
-from taming.modules.losses.vqperceptual import adopt_weight
-import torch
-import torch.nn.functional as F
-import json
-import pickle as pkl
 import math
-from mmdet.models.losses.focal_loss import FocalLoss
-from src.data.specs import POSE_DIM, LHW_DIM, FILL_FACTOR_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM
+import pickle as pkl
+import torch
+import torch.nn as nn
 from torchvision.transforms.functional import resized_crop
+from mmdet.models.losses.focal_loss import FocalLoss
+from taming.modules.losses.vqperceptual import adopt_weight
+from src.data.specs import POSE_DIM, LHW_DIM, FILL_FACTOR_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM
+from src.util.distributions import DiagonalGaussianDistribution
+from ldm.modules.losses.contperceptual import LPIPSWithDiscriminator as LPIPSWithDiscriminator_LDM
 
 class LPIPSWithDiscriminator(LPIPSWithDiscriminator_LDM):
     """LPIPS loss with discriminator."""
@@ -20,13 +18,13 @@ class LPIPSWithDiscriminator(LPIPSWithDiscriminator_LDM):
 class PoseLoss(LPIPSWithDiscriminator_LDM):
     """LPIPS loss with discriminator."""
     def __init__(self, train_on_yaw=True, kl_weight_obj=1e-5, kl_weight_bbox=1e-2, 
-                 codebook_weight=1.0, pose_weight=1.0, mask_weight=0.0, class_weight=1.0, bbox_weight=1.0,
-                 fill_factor_weight=1.0,
-                 pose_loss_fn=None, mask_loss_fn=None, encoder_pretrain_steps=0, pose_conditioned_generation_steps=7000,
-                 leak_img_info_steps=0,
-                 use_mask_loss=False,
-                 num_classes=11, dataset_stats_path="dataset_stats/combined/all.pkl", 
-                *args, **kwargs):
+                codebook_weight=1.0, pose_weight=1.0, mask_weight=0.0, class_weight=1.0, bbox_weight=1.0,
+                fill_factor_weight=1.0,
+                pose_loss_fn=None, mask_loss_fn=None, encoder_pretrain_steps=0, pose_conditioned_generation_steps=7000,
+                leak_img_info_steps=0,
+                use_mask_loss=False,
+                num_classes=11, dataset_stats_path="dataset_stats/combined/all.pkl", 
+            *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.codebook_weight = codebook_weight
         self.pose_conditioned_generation_steps = pose_conditioned_generation_steps
@@ -104,7 +102,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             dist = DiagonalGaussianDistribution(parameters)
             dist_dict[label] = dist
         return dist_dict
-       
+    
     def compute_pose_loss(self, pred, gt, mask_bg):
         # need to get loss split for each part of the pose - t1, t2, t3, v3
         assert pred.shape == gt.shape, "Prediction and ground truth shapes do not match."
@@ -214,7 +212,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             pose_kl_loss[idx] = posterior_curr_sample.kl(distribution_curr_sample) # torch.Size([4])
         pose_kl_loss = torch.sum(pose_kl_loss) / torch.sum(mask_bg) if torch.sum(mask_bg) > 0 else torch.tensor(0.0)
         return pose_kl_loss
-      
+    
     def compute_fill_factor_loss(self, fill_factor_gt, fill_factor_pred, mask_bg):
         fill_factor_loss = self.fill_factor_loss_fn(fill_factor_gt, fill_factor_pred)
         fill_factor_loss = fill_factor_loss * mask_bg
@@ -339,7 +337,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
                 d_weight = torch.tensor(0.0)
 
             disc_factor = adopt_weight(self.disc_factor, global_step, 
-                                       threshold=self.discriminator_iter_start)
+                                    threshold=self.discriminator_iter_start)
             
             loss = weighted_pose_loss \
                 + weighted_class_loss \
@@ -390,7 +388,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
                     "{}/weighted_kl_loss_obj".format(split): self.kl_weight_obj * kl_loss_obj.detach().mean(),
                     "{}/fill_factor_loss".format(split): fill_factor_loss.detach().mean(),
                     "{}/weighted_fill_factor_loss".format(split): weighted_fill_factor_loss.detach().mean(),
-                   }
+                }
             
             return loss, log
 
@@ -406,7 +404,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
                     torch.cat((reconstructions.contiguous().detach(), cond), dim=1))
 
             disc_factor = adopt_weight(self.disc_factor, global_step, 
-                                       threshold=self.discriminator_iter_start)
+                                    threshold=self.discriminator_iter_start)
             
             logits_real = logits_real * mask_bg.unsqueeze(1).unsqueeze(1).unsqueeze(1)
             logits_fake = logits_fake * mask_bg.unsqueeze(1).unsqueeze(1).unsqueeze(1)
@@ -414,7 +412,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
             d_loss = disc_factor * self.disc_loss(logits_real, logits_fake)
 
             log = {"{}/disc_loss".format(split): d_loss.clone().detach().mean(),
-                   "{}/logits_real".format(split): logits_real.detach().mean(),
-                   "{}/logits_fake".format(split): logits_fake.detach().mean()
-                   }
+                "{}/logits_real".format(split): logits_real.detach().mean(),
+                "{}/logits_fake".format(split): logits_fake.detach().mean()
+                }
             return d_loss, log

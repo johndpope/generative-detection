@@ -16,10 +16,10 @@ with open(hmax_path, "rb") as f:
     hmax_dict = pkl.load(f)
 
 def get_world_coord_decoded_pose(decoded_pose_patch, camera_params, 
-                                 patch_size, patch_center, 
-                                 patch_resampling_factor,
-                                 class_pred_id,
-                                 eps=None):
+                                patch_size, patch_center, 
+                                patch_resampling_factor,
+                                class_pred_id,
+                                eps=None):
     """
     Args:
     """
@@ -61,9 +61,9 @@ def get_world_coord_decoded_pose(decoded_pose_patch, camera_params,
     # x and y: in patch ndc. need to convert to world.
     point_patch = torch.stack([x, y, torch.ones_like(z)], dim=1)
     point_world = camera.transform_points_world_from_patch_ndc(point_patch, 
-                                                               z_world,
-                                                               patch_size, 
-                                                               patch_center, eps=eps)
+                                                            z_world,
+                                                            patch_size, 
+                                                            patch_center, eps=eps)
     
     # return format: (x, y, z, l, h, w, yaw)
     bbox3D = torch.cat([point_world[:, :2], z_world, length_absolute, height_absolute, width_absolute, yaw], dim=1)

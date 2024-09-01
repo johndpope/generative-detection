@@ -1,3 +1,5 @@
+# src/util/specs.py
+
 POSE_6D_DIM = 4
 FILL_FACTOR_DIM=1
 LHW_DIM = 3
