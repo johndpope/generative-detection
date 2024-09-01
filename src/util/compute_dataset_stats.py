@@ -1,10 +1,10 @@
-from src.data.datasets.nuscenes import NuScenesTrain, NuScenesValidation
+# src/util/compute_dataset_stats.py
+import os
+import pickle as pkl
 import tqdm
 import numpy as np
-import os
 import torch
-import json
-import pickle as pkl
+from src.data.datasets.nuscenes import NuScenesTrain, NuScenesValidation
 
 class AverageMeter():
     def __init__(self):
@@ -52,8 +52,7 @@ def get_dataset_stats(dataset, save_dir="dataset_stats"):
     } for label in label_names}
     
     pbar = tqdm.tqdm(total=len(dataset))
-    for i in range(len(dataset)):
-        data = dataset[i]
+    for _, data in enumerate(dataset):
         label = data['class_name']
         t1, t2, t3, v3 = data['pose_6d']
         l, h, w = data['bbox_sizes']
@@ -110,10 +109,10 @@ def main():
     save_dir = "dataset_stats"
     
     nusc_val = NuScenesValidation(**nusc_base_kwargs)
-    val_stats, val_meters_dict = get_dataset_stats(nusc_val, save_dir=save_dir)
+    _, val_meters_dict = get_dataset_stats(nusc_val, save_dir=save_dir)
     
     nusc_train = NuScenesTrain(**nusc_base_kwargs)
-    train_stats, train_meters_dict = get_dataset_stats(nusc_train, save_dir=save_dir)
+    _, train_meters_dict = get_dataset_stats(nusc_train, save_dir=save_dir)
     
     # get combined stats from train_meters_list and val_meters_list
     combined_stats = {}
@@ -131,7 +130,7 @@ def main():
             print(f"{k}: {v}")
     
     os.makedirs(os.path.join(save_dir, "combined"), exist_ok=True)
-    with open(os.path.join(save_dir, "combined", f"all.pkl"), 'wb') as handle:
+    with open(os.path.join(save_dir, "combined", "all.pkl"), 'wb') as handle:
         pkl.dump(combined_stats, handle, protocol=pkl.HIGHEST_PROTOCOL)
     
 if __name__ == "__main__":

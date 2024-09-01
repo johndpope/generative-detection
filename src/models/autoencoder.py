@@ -1,18 +1,10 @@
 # src/models/autoencoder.py
-import math
-import random
-from math import radians
-import numpy as np
-import logging
 from contextlib import contextmanager
-
-import itertools
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
-from torch.distributions.normal import Normal
-from torchvision.ops import batched_nms, nms
+from torchvision.ops import batched_nms
 import torchvision.transforms as T
 import pytorch_lightning as pl
 from torchmetrics.functional.image import total_variation
@@ -23,11 +15,9 @@ from ldm.modules.ema import LitEma
 
 from src.modules.autoencodermodules.feat_encoder import FeatEncoder
 from src.modules.autoencodermodules.feat_decoder import FeatDecoder, AdaptiveFeatDecoder
-from src.modules.autoencodermodules.pose_decoder import PoseDecoderSpatialVAE as PoseDecoder
 from src.util.distributions import DiagonalGaussianDistribution
-from src.util.misc import flip_tensor    
-# from src.util.misc import ReflectPadCenterCrop
-from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM, BACKGROUND_CLASS_IDX, BBOX_DIM, POSE_6D_DIM, FILL_FACTOR_DIM, FINAL_PERTURB_RAD
+
+from src.data.specs import LHW_DIM, POSE_6D_DIM, FILL_FACTOR_DIM, FINAL_PERTURB_RAD
 
 try:
     import wandb

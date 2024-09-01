@@ -1,15 +1,28 @@
+# src/util/cameras.py
+
+from typing import Optional, Union, Tuple, List
 import torch
-from pytorch3d.renderer.cameras import _R, _T, PerspectiveCameras, _FocalLengthType, get_ndc_to_screen_transform
+from pytorch3d.renderer.cameras import _R, _T, PerspectiveCameras, _FocalLengthType
 from pytorch3d.common.datatypes import Device
 from pytorch3d.transforms import Transform3d
-from typing import Optional, Union, Tuple, List
-import logging
-import numpy as np
 
 def robust_inverse(transforms, eps=1e-6):
+    """
+    Compute the inverse of a given transformation matrix, handling cases where the matrix is not invertible.
+
+    Args:
+        transforms (Transform3d): The transformation matrix to invert.
+        eps (float, optional): A small value added to the diagonal of the matrix to make it invertible. Defaults to 1e-6.
+
+    Returns:
+        Transform3d: The inverse of the given transformation matrix.
+
+    Raises:
+        Exception: If the given transformation matrix is not invertible and cannot be made invertible by adding a small value to the diagonal.
+    """
     try:
         ret = transforms.inverse()
-    except Exception as e:
+    except Exception:
         # add a small value to the diagonal to make the matrix invertible
         matrix = transforms.get_matrix()
         delta = torch.eye(matrix.shape[-1], device=matrix.device) * eps
@@ -39,17 +52,17 @@ class PatchPerspectiveCameras(PerspectiveCameras):
     _SHARED_FIELDS = ("_in_ndc",)
     
     def __init__(self, 
-                 znear: float = 0.0,
-                 zfar: float = 80.0,
-                 focal_length: _FocalLengthType = 1.0, 
-                 principal_point=((0.0, 0.0),), 
-                 R: torch.Tensor = _R, 
-                 T: torch.Tensor = _T,
-                 K: Optional[torch.Tensor] = None,
-                 device: Device = "cpu",
-                 in_ndc: bool = False, # We specify the camera parameters in screen space. We want to convert to and from patch NDC space.
-                 image_size: Optional[Union[List, Tuple, torch.Tensor]] = None,
-                 ) -> None:
+                znear: float = 0.0,
+                zfar: float = 80.0,
+                focal_length: _FocalLengthType = 1.0, 
+                principal_point=((0.0, 0.0),), 
+                R: torch.Tensor = _R, 
+                T: torch.Tensor = _T,
+                K: Optional[torch.Tensor] = None,
+                device: Device = "cpu",
+                in_ndc: bool = False, # We specify the camera parameters in screen space. We want to convert to and from patch NDC space.
+                image_size: Optional[Union[List, Tuple, torch.Tensor]] = None,
+                ) -> None:
         """
         Initialize the PatchPerspectiveCameras object.
         
@@ -77,7 +90,7 @@ class PatchPerspectiveCameras(PerspectiveCameras):
         super().__init__(focal_length, principal_point, R, T, K, device, in_ndc, image_size)
         self.znear = znear
         self.zfar = zfar
-     
+    
     def get_patch_projection_transform(self, patch_size, patch_center, **kwargs):
         # world --> ndc
         world_to_ndc_transform = self.get_full_projection_transform(**kwargs)
@@ -95,7 +108,7 @@ class PatchPerspectiveCameras(PerspectiveCameras):
         return transform
         
     def transform_points_world_from_patch_ndc(self, points_patch_ndc, # points in patch ndc
-                                              depth,
+                                            depth,
                                             patch_size,
                                             patch_center,
                                             eps: Optional[float] = None, **kwargs) -> torch.Tensor:
@@ -107,7 +120,7 @@ class PatchPerspectiveCameras(PerspectiveCameras):
         points_ndc = robust_inverse(self.get_patch_ndc_camera_transform(patch_size, patch_center, **kwargs)).transform_points(points_patch_ndc, eps=1e-7)
         # ndc --> screen
         points_screen = robust_inverse(self.get_ndc_camera_transform()).transform_points(points_ndc, eps=1e-7)
-        # points_screen[..., -1] = depth
+
         # screen --> camera
         points_screen[..., -1] = screen_depth[..., -1] 
         points_camera = -self.get_projection_transform().inverse().transform_points(points_screen, eps=1e-7)
@@ -115,10 +128,10 @@ class PatchPerspectiveCameras(PerspectiveCameras):
         return points_camera
         
     def transform_points_patch_ndc(self, points, 
-                                   patch_size, 
-                                   patch_center,
-                                   cam_instance=None,
-                                   eps: Optional[float] = None, **kwargs) -> torch.Tensor:
+                                patch_size, 
+                                patch_center,
+                                cam_instance=None,
+                                eps: Optional[float] = None, **kwargs) -> torch.Tensor:
         # camera --> ndc points
         points = points.to(self.device)
         # points_ndc = self.transform_points_ndc(points, eps=None)
@@ -131,10 +144,7 @@ class PatchPerspectiveCameras(PerspectiveCameras):
         
         # ndc --> patch ndc points
         points_patch_ndc = ndc_to_patch_ndc_transform.transform_points(points_ndc, eps=1e-7)
-        ##### DEBUGGING #####
-        # world_depth = points[..., -1]
-        # abc = self.transform_points_world_from_patch_ndc(points_patch_ndc, world_depth, patch_size, patch_center, eps=1e-7)
-        ##### DEBUGGING #####
+
         # if first 2 values are > 0.5 print
         if points_patch_ndc.dim() == 3:
             points_patch_ndc = points_patch_ndc.view(-1)
@@ -268,7 +278,7 @@ def get_ndc_to_patch_ndc_transform(
     patch_center = torch.cat([patch_center, torch.zeros_like(patch_center[..., :1])], dim=-1)
     
     K = torch.zeros((cameras._N, 4, 4), device=cameras.device, dtype=torch.float32)
-    # cx_screen, cy_screen = patch_center[..., 0], patch_center[..., 1]
+
     # Transform the patch center from screen to NDC
     screen_to_ndc_transform = cameras.get_ndc_camera_transform()
     patch_center_ndc = screen_to_ndc_transform.transform_points(patch_center)
@@ -284,10 +294,7 @@ def get_ndc_to_patch_ndc_transform(
     
     K[:, 0, 0] = (img_scale / patch_scale)
     K[:, 1, 1] = (img_scale / patch_scale)
-    
-    # tx = cx_ndc
-    # ty = cy_ndc
-    
+        
     K[:, 3, 0] = -(img_scale / patch_scale) * cx_ndc
     K[:, 3, 1] = -(img_scale / patch_scale) * cy_ndc
     K[:, 2, 2] = 1.0

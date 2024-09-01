@@ -1,22 +1,17 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
-#
-# NVIDIA CORPORATION and its licensors retain all intellectual property
-# and proprietary rights in and to this software, related documentation
-# and any modifications thereto.  Any use, reproduction, disclosure or
-# distribution of this software and related documentation without an express
-# license agreement from NVIDIA CORPORATION is strictly prohibited.
+"""Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 
+NVIDIA CORPORATION and its licensors retain all intellectual property
+and proprietary rights in and to this software, related documentation
+and any modifications thereto.  Any use, reproduction, disclosure or
+distribution of this software and related documentation without an express
+license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-## Code adapted from: https://github.com/NVlabs/stylegan2-ada-pytorch/tree/main
-
+Code adapted from: https://github.com/NVlabs/stylegan2-ada-pytorch/tree/main
+"""
 import numpy as np
 import torch
-from torch_utils import misc
-from torch_utils import persistence
-from torch_utils.ops import conv2d_resample
-from torch_utils.ops import upfirdn2d
-from torch_utils.ops import bias_act
-from torch_utils.ops import fma
+from torch_utils import misc, persistence
+from torch_utils.ops import conv2d_resample, upfirdn2d, bias_act, fma
 
 @misc.profiled_function
 def modulated_conv2d(

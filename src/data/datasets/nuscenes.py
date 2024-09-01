@@ -17,7 +17,7 @@ from torchvision.transforms.functional import pil_to_tensor
 from src.util.misc import EasyDict as edict
 from src.util.cameras import PatchPerspectiveCameras as PatchCameras
 from src.util.cameras import z_world_to_learned
-from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE,  POSE_DIM, LHW_DIM, BBOX_3D_DIM
+from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE, POSE_DIM, LHW_DIM, BBOX_3D_DIM
 
 CAM_NAMESPACE = 'CAM'
 CAMERAS = ["FRONT", "FRONT_RIGHT", "FRONT_LEFT", "BACK", "BACK_LEFT", "BACK_RIGHT"]
@@ -84,10 +84,10 @@ class NuScenesBase(MMDetNuScenesDataset):
 
     """
     def __init__(self, data_root, label_names, patch_height=256, patch_aspect_ratio=1.,
-                 is_sweep=False, perturb_center=True, perturb_scale=False, 
-                 negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
-                 perturb_prob=0.0, patch_center_rad_init=0.5, 
-                 perturb_yaw=False, allow_zoomout=False,
+                is_sweep=False, perturb_center=True, perturb_scale=False, 
+                negative_sample_prob=0.5, h_minmax_dir = "dataset_stats/combined", 
+                perturb_prob=0.0, patch_center_rad_init=0.5, 
+                perturb_yaw=False, allow_zoomout=False,
                  **kwargs):
         # Setup directory
         self.data_root = data_root
@@ -147,7 +147,6 @@ class NuScenesBase(MMDetNuScenesDataset):
         x2 = center_pixel_loc[0] + patch_size // 2
         y2 = center_pixel_loc[1] + patch_size // 2
         
-        is_corner_case = False
         # Handle Out of Bounds Edge Cases
         if x2 >= img_size[0] or y2 >= img_size[1] or x1 <= 0 or y1 <= 0:
             # Move patch back into image
@@ -158,8 +157,6 @@ class NuScenesBase(MMDetNuScenesDataset):
             y1 = y1 + delta_y
             x2 = x2 + delta_x
             y2 = y2 + delta_y
-            # Set to corner case to prevent further perturbations
-            is_corner_case = True
         
         patch_center_2d = (x1 + patch_size // 2, y1 + patch_size // 2)
         
@@ -538,8 +535,8 @@ class NuScenesBase(MMDetNuScenesDataset):
             fill_factor = float(fill_factor_new)
             
             cam_instance.update({'patch': patch,
-                                 'fill_factor': fill_factor,
-                                 'mask_2d_bbox':mask_2d_bbox})
+                                'fill_factor': fill_factor,
+                                'mask_2d_bbox':mask_2d_bbox})
         
         cam_instance.zoom_multiplier = torch.tensor(zoom_multiplier).squeeze()
         

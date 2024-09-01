@@ -1,10 +1,10 @@
 # src/modules/autoencodermodules/feat_decoder.py
-from ldm.modules.diffusionmodules.model import Decoder as LDMDecoder
-import torch.nn as nn
-from src.modules.autoencodermodules.adaptiveconv import SynthesisLayer as AdpativeConv2dLayer
-import numpy as np
 import torch
+import torch.nn as nn
+import numpy as np
 from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample, nonlinearity, ResnetBlock
+from ldm.modules.diffusionmodules.model import Decoder as LDMDecoder
+from src.modules.autoencodermodules.adaptiveconv import SynthesisLayer as AdpativeConv2dLayer
 
 class FeatDecoder(LDMDecoder):
     def __init__(self, **kwargs):
