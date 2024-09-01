@@ -71,8 +71,8 @@ class PoseAutoencoder(AutoencoderKL):
                 add_noise_to_z_obj=False,
                 train_on_yaw=True,
                 ema_decay=0.999,
-                # apply_conv_crop_img_space=False,
-                # apply_conv_crop_latent_space=False,
+                apply_conv_crop_img_space=False,
+                apply_conv_crop_latent_space=False,
                 quantconfig=None,
                 quantize_obj=False,
                 quantize_pose=False,
@@ -213,13 +213,7 @@ class PoseAutoencoder(AutoencoderKL):
         # pass
         if self.use_ema:
             self.model_ema(self)
-            
-    def _draw_samples(self, z_mu, z_logstd):
-        z_std = torch.exp(z_logstd)
-        z_dim = z_mu.size(1)
-        r = Variable(x.data.new(b,z_dim).normal_())
-        return z_std*r + z_mu
-    
+                
     def _decode_pose_to_distribution(self, z, sample_posterior=True):
         # no mu and std dev for class prediction, this is just a class confidence score list of len num_classes
         c_pred = z[..., -self.num_classes:] # torch.Size([8, num_classes])
@@ -410,14 +404,7 @@ class PoseAutoencoder(AutoencoderKL):
     def get_bbox_input(self, batch, k):
         x = batch[k]
         return x
-    
-    def _get_perturbed_pose(self, batch, k):
-        x = batch[k].squeeze(1) # torch.Size([1, 4])
-        if self.train_on_yaw:
-            x = torch.zeros_like(x) # torch.Size([4, 6])
-            x[:, -1] = batch["yaw_perturbed"] # torch.Size([4])
-        return x # torch.Size([1, 4])
-    
+        
     def get_fill_factor_input(self, batch, k):
         x = batch[k]
         return x
@@ -699,13 +686,6 @@ class PoseAutoencoder(AutoencoderKL):
         #     opt_disc.param_groups[0]['capturable'] = True
         return [opt_ae, opt_disc], []
     
-    def _perturb_poses(self, batch, dec_pose):
-        pose_6d_perturbed_v3 = self._get_perturbed_pose(batch, self.pose_perturbed_key)[:, -1]
-        pose_6d_perturbed_ret = dec_pose.clone() # torch.Size([4, 8])
-        pose_6d_perturbed_ret[:, 3] = pose_6d_perturbed_v3 # torch.Size([4, 8])
-        assert pose_6d_perturbed_ret.shape == dec_pose.shape, f"pose_6d_perturbed_ret shape: {pose_6d_perturbed_ret.shape}"
-        return pose_6d_perturbed_ret.to(self.device) # torch.Size([4, 8])
-
     def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace, zoom_mult_1, zoom_mult_2):
         # torch.Size([4, 3, 256, 256]) torch.Size([4, 8]) torch.Size([4, 16, 16, 16]) torch.Size([4, 7])
         # Run full forward pass
@@ -791,8 +771,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                 add_noise_to_z_obj=False,
                 train_on_yaw=True,
                 ema_decay=0.999,
-                # apply_conv_crop_img_space=False,
-                # apply_conv_crop_latent_space=False,
                 quantconfig=None,
                 quantize_obj=False,
                 quantize_pose=False,
@@ -854,11 +832,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         self.pose_decoder = instantiate_from_config(pose_decoder_config)
         
         # Decoder Setup
-
-        # self.apply_conv_crop_img_space = apply_conv_crop_img_space
-        # self.apply_conv_crop_latent_space = apply_conv_crop_latent_space
-        # assert not (self.apply_conv_crop_img_space and self.apply_conv_crop_latent_space), "Only one of the crop types (image or latent space) can be applied"
-
         decoder_cfg = ddconfig.copy()
         decoder_cfg["mid_adaptive"] = decoder_mid_adaptive
         decoder_cfg["num_classes"] = lossconfig["params"]["num_classes"]
