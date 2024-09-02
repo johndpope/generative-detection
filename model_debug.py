@@ -465,14 +465,9 @@ def main():
 
     # data
     data = get_data(config)
-
+    config.params.lossconfig.params.num_classes = len(data.params.train.params.label_names)
     # configure learning rate
     model = configure_learning_rate(config, model, lightning_config, cpu, opt)
-
-    # TODO: Make optional 
-    if False:
-        model.patch_center_rad = data.datasets['train'].data.patch_center_rad
-        model.patch_center_rad_init = data.datasets['train'].data.patch_center_rad_init
     
     # allow checkpointing via USR1
     def melk(*args, **kwargs):
