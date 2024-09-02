@@ -31,6 +31,18 @@ model:
         mask_loss_fn: "l2"
         disc_in_channels: 3
         dataset_stats_path: "dataset_stats/combined/all.pkl"
+
+    pose_decoder_config:
+      target: src.modules.autoencodermodules.pose_decoder.PoseDecoderSpatialVAE
+      params: 
+        num_channels: 16
+        n: 16
+        m: 16
+        hidden_dim: 500
+        num_layers: 2
+        activation: tanh
+        resid: False
+
     ddconfig:
       double_z: True
       z_channels: 16

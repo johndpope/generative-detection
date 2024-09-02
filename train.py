@@ -471,6 +471,8 @@ def main():
         # data
         data = get_data(config)
         config.params.lossconfig.params.num_classes = len(data.params.train.params.label_names)
+        config.params.pose_decoder_config.params.num_classes = config.params.lossconfig.params.num_classes
+
         # configure learning rate
         model = configure_learning_rate(config, model, lightning_config, cpu, opt)
 

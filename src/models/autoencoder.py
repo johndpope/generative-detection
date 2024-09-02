@@ -290,7 +290,7 @@ class PoseAutoencoder(AutoencoderKL):
                 z_obj = posterior_obj.mode()
                 
         # Extract pose information from pose features
-        pred_pose, bbox_posterior = self.decode_pose(pose_feat, sample_posterior=sample_posterior if not self.obj_quantization else False) # torch.Size([4, 8]), torch.Size([4, 7])
+        pred_pose, bbox_posterior = self.decode_pose(pose_feat, sample_posterior=False if self.obj_quantization else sample_posterior) # torch.Size([4, 8]), torch.Size([4, 7])
         
         # Dropout object feature latents
         self.dropout_prob = self._get_dropout_prob()
