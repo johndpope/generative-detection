@@ -20,7 +20,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
     def __init__(self, train_on_yaw=True, kl_weight_obj=1e-5, kl_weight_bbox=1e-2, 
                 codebook_weight=1.0, pose_weight=1.0, mask_weight=0.0, class_weight=1.0, bbox_weight=1.0,
                 fill_factor_weight=1.0,
-                pose_loss_fn=None, mask_loss_fn=None, encoder_pretrain_steps=0, pose_conditioned_generation_steps=7000,
+                pose_loss_fn=None, mask_loss_fn=None, encoder_pretrain_steps=0, pose_conditioned_generation_steps=0,
                 leak_img_info_steps=0,
                 use_mask_loss=False,
                 num_classes=11, dataset_stats_path="dataset_stats/combined/all.pkl", 
@@ -275,7 +275,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         # 2D BBOX mask to focus mse loss on objects only
         mask_2d_bbox = mask_2d_bbox.to(rgb_gt.device)
         use_pixel_loss = True
-        if global_step <= (self.leak_img_info_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps):
+        if global_step < (self.leak_img_info_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps):
             use_pixel_loss = False
 
         disc_inputs, reconstructions, reconstructions_cropped = self._get_disc_input_rec(gt_obj, rgb_pred, rgb_gt)

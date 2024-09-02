@@ -1,25 +1,17 @@
-# %%
+# visualize.py
+import math
+import os
+import matplotlib.pyplot as plt
+from PIL import Image
+from pathlib import Path
+import numpy as np
 import torch
 from omegaconf import OmegaConf
-from pytorch_lightning import seed_everything
-from src.util.misc import log_opts, set_submodule_paths, set_cache_directories
+import torchvision.transforms as transforms
+from src.util.misc import set_submodule_paths
 set_submodule_paths(submodule_dir="submodules")
 from ldm.util import instantiate_from_config
 from train import get_data
-from PIL import Image
-import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
-import numpy as np
-import math
-import os
-from src.data.preprocessing.data_modules import DataModuleFromConfig
-
-# %%
-config_path = "configs/autoencoder/4_adaptive_conv/learnt_shift_mini.yaml"
-checkpoint_path = "logs/2024-08-23T05-06-58_learnt_shift/checkpoints/last.ckpt"
-
-
-config = OmegaConf.load(config_path)
 
 def load_model(config, ckpt_path):
     model = instantiate_from_config(config.model)
@@ -28,13 +20,7 @@ def load_model(config, ckpt_path):
     model.eval()
     return model
 
-model = load_model(config, checkpoint_path)
-model.eval()
 
-# %%
-data = get_data(config)
-
-# %%
 def get_second_pose_lists(pose_gt, second_pose, num_points=4, grid_size=5):
     # Generate points between (x1, y1) and (x2, y2)
     x_points = torch.linspace(pose_gt[0, 0], second_pose[0, 0], steps=num_points + 2)
@@ -62,7 +48,6 @@ def get_second_pose_lists(pose_gt, second_pose, num_points=4, grid_size=5):
     
     return second_poses_lists
 
-# %%
 def save_output(output, output_path, rescale=False):
     if rescale:
         output = (output + 1.0) / 2.0
@@ -82,14 +67,11 @@ def save_lists_output(pred_obj_lists, inference_pose_lists):
         image_path = f"./image/image_{x}_{y}_{z}.png"
         save_output(pred_obj, image_path, rescale=True)
 
-
-# %%
 def inference_a_pose(model, rgb_in, pose_gt, second_pose):
     with torch.no_grad():
         pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = model(rgb_in, pose_gt, second_pose, return_pred_indices=True)
         return pred_obj
 
-# %%
 def inference_second_pose_lists(model, batch, num_points=4):
     pred_obj_lists = []
     inference_pose_lists = []
@@ -106,9 +88,6 @@ def inference_second_pose_lists(model, batch, num_points=4):
             inference_pose_lists.append(pose.unsqueeze(0))
         
         return pred_obj_lists, inference_pose_lists
-
-# %%
-from pathlib import Path
 
 def plot_images_side_by_side(inference_pose_lists, folder_path='./image/', num_images=6):
     folder_path = Path(folder_path)
@@ -151,20 +130,27 @@ def plot_images_side_by_side(inference_pose_lists, folder_path='./image/', num_i
     plt.tight_layout()
     plt.savefig(f"{folder_path}/plots/plot.png")
 
-# %%
-iteration = iter(data.datasets['train'])
+def main():
+    config_path = "configs/autoencoder/4_adaptive_conv/learnt_shift_mini.yaml"
+    checkpoint_path = "logs/2024-08-23T05-06-58_learnt_shift/checkpoints/last.ckpt"
+    config = OmegaConf.load(config_path)
+    model = load_model(config, checkpoint_path)
+    model.eval()
 
-# %%
-batch = next(iteration)
+    data = get_data(config)
 
-for key in batch:
-    if isinstance(batch[key], float) or isinstance(batch[key], int):
-        batch[key] = torch.tensor([batch[key]])
-    elif isinstance(batch[key], torch.Tensor):
-        batch[key] = batch[key].unsqueeze(0)
-pred_obj_lists, inference_pose_lists = inference_second_pose_lists(model, batch)
-save_lists_output(pred_obj_lists, inference_pose_lists)
-plot_images_side_by_side(inference_pose_lists, num_images=len(pred_obj_lists))
+    iteration = iter(data.datasets['train'])
 
+    batch = next(iteration)
 
+    for key in batch:
+        if isinstance(batch[key], float) or isinstance(batch[key], int):
+            batch[key] = torch.tensor([batch[key]])
+        elif isinstance(batch[key], torch.Tensor):
+            batch[key] = batch[key].unsqueeze(0)
+    pred_obj_lists, inference_pose_lists = inference_second_pose_lists(model, batch)
+    save_lists_output(pred_obj_lists, inference_pose_lists)
+    plot_images_side_by_side(inference_pose_lists, num_images=len(pred_obj_lists))
 
+if __name__ == "__main__":
+    main()
