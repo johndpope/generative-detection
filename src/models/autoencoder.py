@@ -5,31 +5,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import batched_nms
-import torchvision.transforms as T
 import pytorch_lightning as pl
 from torchmetrics.functional.image import total_variation
-
 from ldm.models.autoencoder import AutoencoderKL
 from ldm.util import instantiate_from_config
 from ldm.modules.ema import LitEma
-
 from src.modules.autoencodermodules.feat_encoder import FeatEncoder
 from src.modules.autoencodermodules.feat_decoder import FeatDecoder, AdaptiveFeatDecoder
 from src.util.distributions import DiagonalGaussianDistribution
-
 from src.data.specs import LHW_DIM, POSE_6D_DIM, FILL_FACTOR_DIM, FINAL_PERTURB_RAD
-
-try:
-    import wandb
-except ImportWarning:
-    print("WandB not installed")
-    wandb = None
-
-
-class Autoencoder(AutoencoderKL):
-    """Autoencoder model with KL divergence loss."""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
 
 class PoseAutoencoder(AutoencoderKL):
     """
@@ -52,21 +36,18 @@ class PoseAutoencoder(AutoencoderKL):
                 colorize_nlabels=None,
                 monitor=None,
                 pose_decoder_config=None,
-                dropout_prob_init=1.0,
-                dropout_prob_final=0.7,
-                dropout_warmup_steps=5000,
-                pose_conditioned_generation_steps=10000,
-                perturb_rad_warmup_steps=100000,
+                dropout_prob_init=0.0,
+                dropout_prob_final=0.0,
+                dropout_warmup_steps=0,
+                pose_conditioned_generation_steps=0,
+                perturb_rad_warmup_steps=0,
                 intermediate_img_feature_leak_steps=0,
                 add_noise_to_z_obj=False,
                 train_on_yaw=True,
                 ema_decay=0.999,
-                apply_conv_crop_img_space=False,
-                apply_conv_crop_latent_space=False,
                 quantconfig=None,
                 quantize_obj=False,
                 quantize_pose=False,
-                # latent_manual_crop_reflect_pad=False,
                 **kwargs
                 ):
         pl.LightningModule.__init__(self)
@@ -124,10 +105,6 @@ class PoseAutoencoder(AutoencoderKL):
         self.pose_decoder = instantiate_from_config(pose_decoder_config)
         
         # Decoder Setup
-        # self.apply_conv_crop_img_space = apply_conv_crop_img_space
-        # self.apply_conv_crop_latent_space = apply_conv_crop_latent_space
-        # self.latent_manual_crop_reflect_pad = latent_manual_crop_reflect_pad
-        # assert not (self.apply_conv_crop_img_space and self.apply_conv_crop_latent_space), "Only one of the crop types (image or latent space) can be applied"
         self.decoder = FeatDecoder(**ddconfig)
         
         # Dropout Setup
@@ -298,8 +275,6 @@ class PoseAutoencoder(AutoencoderKL):
             posterior_obj (Distribution): Posterior distribution of the object latent space.
             posterior_pose (Distribution): Posterior distribution of the pose latent space.
         """
-        # apply_manual_crop = self.apply_conv_crop_img_space or self.apply_conv_crop_latent_space
-        # assert apply_manual_crop, "manual crop experiment only in vanilla autoencoder"
         # reshape input_im to (batch_size, 3, 256, 256)
         input_im = input_im.to(memory_format=torch.contiguous_format).float().to(self.device) # torch.Size([4, 3, 256, 256])
         # Encode Image
@@ -325,50 +300,11 @@ class PoseAutoencoder(AutoencoderKL):
             
         if self.iter_counter < self.encoder_pretrain_steps: # no reconstruction loss in this phase
             pred_obj = torch.zeros_like(input_im).to(self.device) # torch.Size([4, 3, 256, 256])
-                
-        # if apply_manual_crop:
-        #     assert zoom_mult is not None, "zoom_mult is not specified, aka None"
 
-        # Apply crop in latent space
-        # if self.apply_conv_crop_latent_space:
-        #     latent_crop_pad_mode = "reflect" if self.latent_manual_crop_reflect_pad else "zero"
-        #     z_obj = self.manual_crop(z_obj, zoom_mult, crop_pad_mode=latent_crop_pad_mode)
-        
         # Predict images from object and pose latents
         pred_obj = self.decode(z_obj) # torch.Size([4, 3, 256, 256])
         
-        # Apply crop in image space
-        # if self.apply_conv_crop_img_space:
-        #     pred_obj = self.manual_crop(pred_obj, zoom_mult, crop_pad_mode="zero")
-            
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
-
-    # def batch_center_crop_resize(self, images, H_crops, W_crops, crop_pad_mode="zero"):
-    #     assert crop_pad_mode in ["zero", "reflect"], f"crop_pad_mode should be either 'zero' or 'reflect', but got {crop_pad_mode}"
-    #     batch_size, _, H, W = images.shape # torch.Size([4, 3, 256, 256])
-    #     cropped_resized_images = torch.zeros_like(images) # torch.Size([4, 3, 256, 256])
-    #     resizer = T.Resize(size=(H, W),interpolation=T.InterpolationMode.BILINEAR)
-    #     for i in range(batch_size):
-    #         H_crop = int(H_crops[i])
-    #         W_crop = int(W_crops[i])
-    #         if crop_pad_mode == "zero":
-    #             center_cropper = T.CenterCrop(size=(H_crop, W_crop))
-    #         elif crop_pad_mode == "reflect":
-    #             center_cropper = ReflectPadCenterCrop(size=(H_crop, W_crop))
-    #         cropped_image = center_cropper(images[i].unsqueeze(0))
-    #         cropped_resized_images[i] = resizer(cropped_image)
-
-    #     return cropped_resized_images
-    
-    # def manual_crop(self, images, zoom_mult, crop_pad_mode="zero"):
-    #     _, _, H, W = images.shape
-        
-    #     H_crops = (H * zoom_mult).long()
-    #     W_crops = (W * zoom_mult).long()
-        
-    #     original_crop_recropped_resized = self.batch_center_crop_resize(images, H_crops, W_crops, crop_pad_mode=crop_pad_mode)
-
-    #     return original_crop_recropped_resized
 
     def get_pose_input(self, batch, k, postfix=""):
         x = batch[k+postfix] 
@@ -862,7 +798,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         if ckpt_path is not None:
             try:
                 self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-            except Exception as e:
+            except Exception:
                 # add optimizer to ignore_keys list
                 ignore_keys = ignore_keys + ["optimizer"]
                 self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
