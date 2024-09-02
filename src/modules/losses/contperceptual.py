@@ -19,7 +19,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
     """LPIPS loss with discriminator."""
     def __init__(self, train_on_yaw=True, kl_weight_obj=1e-5, kl_weight_bbox=1e-2, 
                 codebook_weight=1.0, pose_weight=1.0, mask_weight=0.0, class_weight=1.0, bbox_weight=1.0,
-                fill_factor_weight=1.0,
+                fill_factor_weight=1.0, pixel_loss_weight=1.0, 
                 pose_loss_fn=None, mask_loss_fn=None, encoder_pretrain_steps=0, pose_conditioned_generation_steps=0,
                 leak_img_info_steps=0,
                 use_mask_loss=False,
@@ -34,6 +34,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         self.fill_factor_weight = fill_factor_weight
         self.class_weight = class_weight
         self.bbox_weight = bbox_weight
+        self.pixel_loss_weight = pixel_loss_weight
         self.use_segm_mask_loss = use_mask_loss
         self.num_classes = num_classes
         self.kl_weight_obj = kl_weight_obj
@@ -129,13 +130,12 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
     def _get_rec_loss(self, rgb_inputs, rgb_inputs_cropped, rgb_reconstructions, rgb_reconstructions_cropped, use_pixel_loss, mask_2d_bbox=None):
         # MSE RGB
         if use_pixel_loss:
-            # Compute pixelwise reconstruction only inside 2d bbox
-            #TODO: ADD mask_2d_bbox back 
+            # Compute pixel-wise reconstruction only inside 2d bbox
             if mask_2d_bbox is not None:
                 rec_loss = (rgb_inputs.contiguous() - rgb_reconstructions.contiguous()) * mask_2d_bbox # torch.Size([4, 3, 256, 256])
             else:
                 rec_loss = rgb_inputs.contiguous() - rgb_reconstructions.contiguous()
-            rec_loss = torch.abs(rec_loss)
+            rec_loss = torch.abs(rec_loss) * self.pixel_loss_weight # torch.Size([4, 3, 256, 256])
         else:
             rec_loss = torch.zeros_like(rgb_inputs.contiguous())
             
@@ -276,6 +276,7 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         mask_2d_bbox = mask_2d_bbox.to(rgb_gt.device)
         use_pixel_loss = True
         if global_step < (self.leak_img_info_steps + self.encoder_pretrain_steps + self.pose_conditioned_generation_steps):
+            assert False, "Should not reach this point. We should be using pixel loss always."
             use_pixel_loss = False
 
         disc_inputs, reconstructions, reconstructions_cropped = self._get_disc_input_rec(gt_obj, rgb_pred, rgb_gt)
