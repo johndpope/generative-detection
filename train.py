@@ -445,6 +445,9 @@ def main():
         lightning_config.trainer = trainer_config
 
         # model
+        num_classes = len(config.data.params.train.params.label_names)
+        config.model.params.lossconfig.params.num_classes = num_classes
+        config.model.params.pose_decoder_config.params.num_classes = num_classes
         model = instantiate_from_config(config.model)
         
         # trainer and callbacks
@@ -470,7 +473,6 @@ def main():
 
         # data
         data = get_data(config)
-        config.params.lossconfig.params.num_classes = len(data.params.train.params.label_names)
         # configure learning rate
         model = configure_learning_rate(config, model, lightning_config, cpu, opt)
 
