@@ -52,12 +52,15 @@ def get_perturbed_z_second_pose_lists(pose_gt, second_pose, num_perturbations=5,
     H, W = 256, 256
 
     # Perturb only the z-coordinate using evenly spaced multipliers
-    for multiplier in multipliers:
+    z_min = -3
+    z_max = 3
+    z_crop_list = torch.linspace(z_min, z_max, steps=num_perturbations)
+    for i, multiplier in enumerate(multipliers):
         perturbed_pose = second_pose.clone()
 
         # Use the compute_z_crop function to calculate the new z value
-        z_crop = compute_z_crop(H=H, H_crop=H * multiplier, x=perturbed_pose[0, 0], y=perturbed_pose[0, 1], z=perturbed_pose[0, 2], multiplier=multiplier)
-
+        # z_crop = compute_z_crop(H=H, H_crop=H * multiplier, x=perturbed_pose[0, 0], y=perturbed_pose[0, 1], z=perturbed_pose[0, 2], multiplier=multiplier)
+        z_crop = z_crop_list[i]
         # Update the z value of the perturbed pose
         perturbed_pose[0, 2] = z_crop
 

@@ -5,9 +5,6 @@
 	path = submodules/taming-transformers
 	url = https://github.com/CompVis/taming-transformers.git
 	branch = master
-[submodule "submodules/CLIP"]
-	path = submodules/CLIP
-	url = https://github.com/openai/CLIP.git
 [submodule "submodules/pytorch3d"]
 	path = submodules/pytorch3d
 	url = https://github.com/facebookresearch/pytorch3d.git
