@@ -96,7 +96,7 @@ The code in this repository is released under the [CC0 1.0 Universal](LICENSE) L
 Our codebase for the architecture of training of the VAE builds heavily on the open-sourced repositories of [Latent Diffusion Models](https://github.com/CompVis/latent-diffusion/tree/a506df5756472e2ebaf9078affdde2c4f1502cd4) and [StyleGAN2](https://github.com/NVlabs/stylegan2-ada-pytorch). Thanks for open-sourcing!
 
 ## BibTeX
-```bibtex
+```bibTex
 @article{anonymous_odvae_2024,
     author = Anonymous Authors,
     title = OD-VAE: Inverting Generation for 3D Object Detection,
