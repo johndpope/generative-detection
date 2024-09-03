@@ -109,9 +109,6 @@ class FullyConnectedLayer(torch.nn.Module):
 
 @persistence.persistent_class
 class SynthesisLayer(torch.nn.Module):
-    """
-    
-    """
     def __init__(self,
         in_channels,                    # Number of input channels.
         out_channels,                   # Number of output channels.

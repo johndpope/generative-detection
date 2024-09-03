@@ -1,4 +1,6 @@
 # visualize.py
+from src.util.misc import set_submodule_paths
+set_submodule_paths(submodule_dir="submodules")
 import math
 import os
 import matplotlib.pyplot as plt
@@ -8,8 +10,6 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 import torchvision.transforms as transforms
-from src.util.misc import set_submodule_paths
-set_submodule_paths(submodule_dir="submodules")
 from ldm.util import instantiate_from_config
 from train import get_data
 from pytorch_lightning.utilities.seed import seed_everything
@@ -70,6 +70,9 @@ def get_perturbed_z_second_pose_lists(pose_gt, second_pose, num_perturbations=5,
     return second_poses_lists
 
 def load_model(config, ckpt_path):
+    num_classes = len(config.data.params.train.params.label_names)
+    config.model.params.lossconfig.params.num_classes = num_classes
+    config.model.params.pose_decoder_config.params.num_classes = num_classes
     model = instantiate_from_config(config.model)
     checkpoint = torch.load(ckpt_path, map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint['state_dict'])
@@ -122,11 +125,6 @@ def save_lists_output(pred_obj_lists, inference_pose_lists):
         z = round(pose[2].item(), 2)  # Store z value with higher precision
         image_path = f"./image/image_{x}_{y}_{z}.png"
         save_output(pred_obj, image_path, rescale=True)
-
-def inference_a_pose(model, rgb_in, pose_gt, second_pose):
-    with torch.no_grad():
-        pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = model(rgb_in, pose_gt, second_pose, return_pred_indices=True)
-        return pred_obj
 
 def inference_second_pose_lists(model, batch, num_points=6):
     pred_obj_lists = []
@@ -191,8 +189,8 @@ def plot_images_side_by_side(inference_pose_lists, folder_path='./image/', num_i
 def main():
     seed = 42
     seed_everything(seed)
-    config_path = "configs/autoencoder/zoom/learnt_zoom.yaml"
-    checkpoint_path = "logs/2024-08-30T10-55-19_learnt_zoom/checkpoints/last.ckpt"
+    config_path = "configs/autoencoder/zoom/learnt_zoom_pixel_3.yaml"
+    checkpoint_path = "logs/2024-09-01T20-59-14_learnt_zoom_pixel_3/checkpoints/last.ckpt"
     config = OmegaConf.load(config_path)
     model = load_model(config, checkpoint_path)
     model.eval()
