@@ -1,1 +1,1 @@
-from src.modules.losses.contperceptual import LPIPSWithDiscriminator, PoseLoss
+from src.modules.losses.contperceptual import PoseLoss
