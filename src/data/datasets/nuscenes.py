@@ -395,7 +395,6 @@ class NuScenesBase(MMDetNuScenesDataset):
             se3_exp_map_matrix = se3_exp_map_matrix.unsqueeze(0)
         
         try:
-            # TODO: Debug this!!!!!!
             pose_6d = se3_log_map(se3_exp_map_matrix) # 6d vector
         except Exception as e:
             logging.info("Error in se3_log_map", e)
@@ -813,6 +812,10 @@ class NuScenesBase(MMDetNuScenesDataset):
 
 @DATASETS.register_module()
 class NuScenesTrain(NuScenesBase):
+    """
+    Dataset class for training data in the NuScenes dataset.
+    Inherits from the NuScenesBase class.
+    """
     def __init__(self, **kwargs):
         self.split = "train"
         self.ann_file = "nuscenes_infos_train.pkl"
@@ -821,6 +824,10 @@ class NuScenesTrain(NuScenesBase):
         
 @DATASETS.register_module()     
 class NuScenesValidation(NuScenesBase):
+    """
+    Dataset class for validation data in the NuScenes dataset.
+    Inherits from the NuScenesBase class.
+    """
     def __init__(self, **kwargs):
         self.split = "validation"
         self.ann_file = "nuscenes_infos_val.pkl"
@@ -829,6 +836,10 @@ class NuScenesValidation(NuScenesBase):
 
 @DATASETS.register_module()   
 class NuScenesTest(NuScenesBase):
+    """
+    Dataset class for test data in the NuScenes dataset.
+    Inherits from the NuScenesBase class.
+    """
     def __init__(self, **kwargs):
         self.split = "test"
         ann_file = "nuscenes_infos_test.pkl"
@@ -837,6 +848,10 @@ class NuScenesTest(NuScenesBase):
 
 @DATASETS.register_module()
 class NuScenesTrainMini(NuScenesBase):
+    """
+    Dataset class for mini training data in the NuScenes dataset.
+    Inherits from the NuScenesBase class.
+    """
     def __init__(self, data_root=None, **kwargs):
         self.split = "train-mini"
         ann_file = "nuscenes_mini_infos_train.pkl"
@@ -845,6 +860,10 @@ class NuScenesTrainMini(NuScenesBase):
         
 @DATASETS.register_module()
 class NuScenesValidationMini(NuScenesBase):
+    """
+    Dataset class for mini validation data in the NuScenes dataset.
+    Inherits from the NuScenesBase class.
+    """
     def __init__(self, data_root=None, **kwargs):
         self.split = "val-mini"
         ann_file = "nuscenes_mini_infos_val.pkl"

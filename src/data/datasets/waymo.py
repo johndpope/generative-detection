@@ -22,16 +22,16 @@ from src.util.cameras import z_world_to_learned
 from src.data.specs import LABEL_NAME2ID, LABEL_ID2NAME, CAM_NAMESPACE, POSE_DIM, LHW_DIM, BBOX_3D_DIM
 
 CAM_NAMESPACE = 'CAM'
-CAMERAS = ["FRONT", "FRONT_RIGHT", "FRONT_LEFT", "SIDE_LEFT", "SIDE_RIGHT"]
+CAMERAS = ["FRONT", "FRONT_RIGHT", "FRONT_LEFT", "BACK", "BACK_LEFT", "BACK_RIGHT"]
 CAMERA_NAMES = [f"{CAM_NAMESPACE}_{camera}" for camera in CAMERAS]
 CAM_NAME2CAM_ID = {cam_name: i for i, cam_name in enumerate(CAMERA_NAMES)}
 CAM_ID2CAM_NAME = dict(enumerate(CAMERA_NAMES))
 
 Z_NEAR = 0.01
-Z_FAR = 75.0
+Z_FAR = 60.0
 
-WAYMO_IMG_WIDTH = 1920 
-WAYMO_IMG_HEIGHT = 1280 
+WAYMO_IMG_WIDTH = 1600
+WAYMO_IMG_HEIGHT = 900
 
 PATCH_ANCHOR_SIZES = [50, 100, 200, 400]
 
@@ -304,11 +304,7 @@ class WaymoBase(MMDetWaymoDataset):
         z_crop = self.compute_z_crop(H, H_crop, x, y, z, multiplier)
         fill_factor_cropped = fill_factor * multiplier 
 
-            center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
-            center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
-        
         center_cropper = T.CenterCrop((int(H_crop), int(W_crop)))
-        
         original_crop_recropped = center_cropper(original_crop) 
         resizer = T.Resize(size=(self.patch_size_return[0], self.patch_size_return[1]),interpolation=T.InterpolationMode.BILINEAR)
         original_crop_recropped_resized = resizer(original_crop_recropped)
@@ -399,7 +395,6 @@ class WaymoBase(MMDetWaymoDataset):
             se3_exp_map_matrix = se3_exp_map_matrix.unsqueeze(0)
         
         try:
-            # TODO: Debug this!!!!!!
             pose_6d = se3_log_map(se3_exp_map_matrix) # 6d vector
         except Exception as e:
             logging.info("Error in se3_log_map", e)
@@ -817,6 +812,10 @@ class WaymoBase(MMDetWaymoDataset):
 
 @DATASETS.register_module()
 class WaymoTrain(WaymoBase):
+    """
+    Dataset class for training data in the Waymo dataset.
+    Inherits from the WaymoBase class.
+    """
     def __init__(self, **kwargs):
         self.split = "train"
         self.ann_file = "waymo_infos_train.pkl"
@@ -825,6 +824,10 @@ class WaymoTrain(WaymoBase):
         
 @DATASETS.register_module()     
 class WaymoValidation(WaymoBase):
+    """
+    Dataset class for validation data in the Waymo dataset.
+    Inherits from the WaymoBase class.
+    """
     def __init__(self, **kwargs):
         self.split = "validation"
         self.ann_file = "waymo_infos_val.pkl"
@@ -833,6 +836,10 @@ class WaymoValidation(WaymoBase):
 
 @DATASETS.register_module()   
 class WaymoTest(WaymoBase):
+    """
+    Dataset class for test data in the Waymo dataset.
+    Inherits from the WaymoBase class.
+    """
     def __init__(self, **kwargs):
         self.split = "test"
         ann_file = "waymo_infos_test.pkl"
@@ -841,6 +848,10 @@ class WaymoTest(WaymoBase):
 
 @DATASETS.register_module()
 class WaymoTrainMini(WaymoBase):
+    """
+    Dataset class for mini training data in the Waymo dataset.
+    Inherits from the WaymoBase class.
+    """
     def __init__(self, data_root=None, **kwargs):
         self.split = "train-mini"
         ann_file = "waymo_mini_infos_train.pkl"
@@ -849,6 +860,10 @@ class WaymoTrainMini(WaymoBase):
         
 @DATASETS.register_module()
 class WaymoValidationMini(WaymoBase):
+    """
+    Dataset class for mini validation data in the Waymo dataset.
+    Inherits from the WaymoBase class.
+    """
     def __init__(self, data_root=None, **kwargs):
         self.split = "val-mini"
         ann_file = "waymo_mini_infos_val.pkl"
