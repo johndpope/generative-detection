@@ -10,40 +10,38 @@ This repository is the official implementation of [OD-VAE: Inverting Generation 
 [Anonymous Author(s)]()
 
 [Demo link]()
-
 ## Requirements
+- This code has only been tested in the Linux operating system.
+- We used 4 NVIDIA A6000 GPUs for training, but this code should be compatible with any NVIDIA GPU of the Ampere or any later generation
+- This code is compatible with CUDA Toolkit `v11.6`
+
+## Setting up the environment
 
 To install requirements:
 
-1. Clone the repository:
+1. Clone the repository, and navigate into the cloned repository:
 ```bash
 git clone REPOSITORY_URL
-```
-2. Navigate into the cloned repository:
-```bash
 cd generative-detection
 ```
-3. Create a new conda environment named `odvae`:
+
+2. Create a new conda environment named `odvae` and activate it:
 ```bash
 conda create --name odvae
-```
-
-4. Activate the new conda environment:
-```bash
 conda activate odvae
 ```
 
-5. Install all requirements in this environment using the provided `setup.sh` script.
+3. Install all requirements in this environment using the provided `setup.sh` script.
 ```bash
 bash setup.sh
 ```
 
-6. To initialize, fetch and checkout all the nested submodules:
+4. To initialize, fetch and checkout all the nested submodules:
 ```bash
 git submodule update --init --recursive
 ```
 
-7. Install the Python package:
+5. Install the Python package:
 ```bash
 pip install -e .
 ```
@@ -123,7 +121,7 @@ Our codebase for the architecture of training of the VAE builds heavily on the o
 ```bash
 pip install mkl==2024.0.0
 ```
-- In case you are having trouble resuming training from a checkpoint, please make sure to upgrade PyTorch version from v1.12.0 to v1.12.1! This issue is caused due to a bug in v1.12.0 that was fixed in v1.12.1.
+- In case you are having trouble resuming training from a checkpoint, please make sure to upgrade the PyTorch version from `v1.12.0` to `v1.12.1`! This issue is caused due to a bug in `v1.12.0` that was fixed in `v1.12.1`.
 
 ## References
 [1] Latent Diffusion Models: [ArXiv](https://arxiv.org/abs/2112.10752) | [GitHub](https://github.com/CompVis/latent-diffusion)

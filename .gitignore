@@ -18,7 +18,7 @@ images
 generate_and_submit_slurm.py
 dnnlib
 torch_utils
-
+submodules
 */launch.json
 
 # Byte-compiled / optimized / DLL files
