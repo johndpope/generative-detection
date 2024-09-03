@@ -1,4 +1,13 @@
-# train_autoencoder.py
+"""
+model_debug.py
+TODO: Delete this file before submission!
+=======================================================================
+Code adapted from https://github.com/CompVis/latent-diffusion.
+License provided below.
+=======================================================================
+MIT License
+Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
+"""
 import argparse, os, sys, datetime, glob
 import pytorch_lightning as pl
 import logging

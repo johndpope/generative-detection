@@ -1,4 +1,6 @@
-# src/util/specs.py
+"""
+src/util/specs.py
+"""
 
 POSE_6D_DIM = 4
 FILL_FACTOR_DIM=1

@@ -1,4 +1,12 @@
-# src/models/autoencoder.py
+"""
+src/models/autoencoder.py
+=======================================================================
+Code adapted from https://github.com/CompVis/latent-diffusion.
+License provided below.
+=======================================================================
+MIT License
+Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
+"""
 from contextlib import contextmanager
 import numpy as np
 import torch
@@ -367,8 +375,6 @@ class PoseAutoencoder(AutoencoderKL):
             snd_bbox = self.get_bbox_input(batch, self.bbox_key).to(self.device) # torch.Size([4, 3]) 
             snd_fill = self.get_fill_factor_input(batch, self.fill_factor_key+"_2").to(self.device).float().unsqueeze(1)
 
-            # snd_pose = snd_pose.unsqueeze(0) if snd_pose.dim() == 1 else snd_pose
-            # snd_bbox = snd_bbox.unsqueeze(0) if snd_bbox.dim() == 1 else snd_bbox
             # get one hot encoding for class_id - all classes in self.label_id2class_id.values
             num_classes = self.num_classes
             class_probs = torch.nn.functional.one_hot(class_gt, num_classes=num_classes).float()
@@ -606,10 +612,6 @@ class PoseAutoencoder(AutoencoderKL):
                                 lr=lr, betas=(0.5, 0.9))
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
-
-        # if False: # TODO: make optional
-        #     opt_ae.param_groups[0]['capturable'] = True
-        #     opt_disc.param_groups[0]['capturable'] = True
         return [opt_ae, opt_disc], []
     
     def _log_reconstructions(self, rgb_in, pose_gt, rgb_in_viz, second_pose, log, namespace, zoom_mult_1, zoom_mult_2):

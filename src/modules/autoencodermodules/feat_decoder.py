@@ -1,3 +1,15 @@
+"""
+src/modules/autoencodermodules/feat_decoder.py
+=======================================================================
+Code adapted from https://github.com/NVlabs/stylegan2-ada-pytorch and 
+https://github.com/CompVis/latent-diffusion. Licenses provided below.
+=======================================================================
+NVIDIA Source Code License for StyleGAN2 with Adaptive Discriminator Augmentation (ADA)
+Copyright (c) 2021, NVIDIA Corporation. All rights reserved.
+=======================================================================
+MIT License
+Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
+"""
 # src/modules/autoencodermodules/feat_decoder.py
 import torch
 import torch.nn as nn
@@ -79,14 +91,14 @@ class AdaptiveFeatDecoder(nn.Module):
         if self.mid_adaptive:
             self.mid.block_1 = AdaptiveResnetBlock(in_channels=block_in,
                                         resolution=curr_res,
-                                       out_channels=block_in,
-                                       temb_channels=self.temb_ch,
-                                       dropout=dropout)
+                                        out_channels=block_in,
+                                        temb_channels=self.temb_ch,
+                                        dropout=dropout)
         else:
             self.mid.block_1 = ResnetBlock(in_channels=block_in,
-                                       out_channels=block_in,
-                                       temb_channels=self.temb_ch,
-                                       dropout=dropout)
+                                        out_channels=block_in,
+                                        temb_channels=self.temb_ch,
+                                        dropout=dropout)
 
         self.mid.attn_1 = make_attn(block_in, attn_type=attn_type)
 
@@ -110,10 +122,9 @@ class AdaptiveFeatDecoder(nn.Module):
             block_out = ch*ch_mult[i_level]
             for i_block in range(self.num_res_blocks+1):
                 block.append(ResnetBlock(in_channels=block_in,
-                                        # resolution=curr_res,
-                                         out_channels=block_out,
-                                         temb_channels=self.temb_ch,
-                                         dropout=dropout))
+                                        out_channels=block_out,
+                                        temb_channels=self.temb_ch,
+                                        dropout=dropout))
                 block_in = block_out
                 if curr_res in attn_resolutions:
                     attn.append(make_attn(block_in, attn_type=attn_type))
@@ -164,7 +175,6 @@ class AdaptiveFeatDecoder(nn.Module):
 
         w = self.pose_embedding_map(pose_pe) # torch.Size([4, 512])
 
-        #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
 
         # timestep embedding
@@ -206,7 +216,7 @@ class AdaptiveFeatDecoder(nn.Module):
 
 class AdaptiveResnetBlock(nn.Module):
     def __init__(self, *, in_channels, resolution, w_dim=512, out_channels=None, conv_shortcut=False,
-                 dropout, temb_channels=512):
+                dropout, temb_channels=512):
         super().__init__()
         self.in_channels = in_channels
         out_channels = in_channels if out_channels is None else out_channels
@@ -219,11 +229,10 @@ class AdaptiveResnetBlock(nn.Module):
                                         w_dim=w_dim,
                                         resolution=resolution,
                                         kernel_size=3,)
-        #                              stride=1,
-        #                              padding=1)
+
         if temb_channels > 0:
             self.temb_proj = torch.nn.Linear(temb_channels,
-                                             out_channels)
+                                            out_channels)
         self.norm2 = Normalize(out_channels)
         self.dropout = torch.nn.Dropout(dropout)
 
@@ -232,18 +241,16 @@ class AdaptiveResnetBlock(nn.Module):
                                         w_dim=w_dim,
                                         resolution=resolution,
                                         kernel_size=3,)
-        #                              stride=1,
-        #                              padding=1)
+
         if self.in_channels != self.out_channels:
             if self.use_conv_shortcut:
                 self.conv_shortcut = AdpativeConv2dLayer(in_channels,
-                                                     out_channels,
-                                                     w_dim=w_dim,
+                                                    out_channels,
+                                                    w_dim=w_dim,
                                                     resolution=resolution,
-                                                     kernel_size=3,)
-                                                    #  stride=1,
-                                                    #  padding=1)
-            else: # TODO: shouldnt go here... so self.use_conv_shortcut must be True
+                                                    kernel_size=3,)
+                                                   
+            else:
                 assert self.use_conv_shortcut, "self.use_conv_shortcut must be True, but is set to False here."
                 self.nin_shortcut = torch.nn.Conv2d(in_channels,
                                                     out_channels,

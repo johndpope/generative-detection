@@ -1,4 +1,7 @@
-# src/modules/autoencodermodules/feat_encoder.py
+"""
+src/modules/autoencodermodules/feat_encoder.py
+"""
+
 from ldm.modules.diffusionmodules.model import Encoder as LDMEncoder
 
 class FeatEncoder(LDMEncoder):

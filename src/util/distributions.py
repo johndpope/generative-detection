@@ -1,4 +1,12 @@
-# src/util/distributions.py
+"""
+src/util/distributions.py
+=======================================================================
+Code adapted from https://github.com/CompVis/latent-diffusion.
+License provided below.
+=======================================================================
+MIT License
+Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
+"""
 import numpy as np
 import torch
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution as LDM_DiagonalGaussianDistribution
@@ -6,7 +14,6 @@ from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 class DiagonalGaussianDistribution(LDM_DiagonalGaussianDistribution):
     def __init__(self, parameters, deterministic=False):
         super(DiagonalGaussianDistribution, self).__init__(parameters, deterministic)
-        # self.device = parameters.device
         
     def kl(self, other=None):
         if self.deterministic:

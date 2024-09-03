@@ -1,4 +1,14 @@
-# src/util/cameras.py
+"""
+src/util/cameras.py
+Code adapted from https://github.com/facebookresearch/pytorch3d.
+License provided below.
+=======================================================================
+BSD License
+
+For PyTorch3D software
+
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+"""
 
 from typing import Optional, Union, Tuple, List
 import torch

@@ -1,4 +1,6 @@
-# src/util/compute_dataset_stats.py
+"""
+src/util/compute_dataset_stats.py
+"""
 import os
 import pickle as pkl
 import tqdm

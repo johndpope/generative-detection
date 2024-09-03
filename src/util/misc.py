@@ -10,6 +10,8 @@ class EasyDict(dict):
     """
     Code from https://github.com/makinacorpus/easydict
     
+    Copyright (C) 2007 Free Software Foundation, Inc. <http://fsf.org/>
+    
     A dictionary subclass that allows accessing keys as attributes.
 
     This class provides a convenient way to access dictionary keys as attributes.

@@ -1,4 +1,12 @@
-# src/util/callbacks.py
+"""
+src/util/callbacks.py
+=======================================================================
+Code adapted from https://github.com/CompVis/latent-diffusion.
+License provided below.
+=======================================================================
+MIT License
+Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
+"""
 import os
 import time
 from pathlib import Path
@@ -65,7 +73,7 @@ class SetupCallback(Callback):
             logging.info("Lightning config")
             logging.info(OmegaConf.to_yaml(self.lightning_config))
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
-                           os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
+                            os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
 
         else:
             # ModelCheckpoint callback created log directory --- remove it
@@ -109,8 +117,8 @@ class ImageLogger(Callback):
     log_images_kwargs (dict): Additional keyword arguments for log_images method.
     """
     def __init__(self, batch_frequency, max_images, clamp=True, increase_log_steps=True,
-                 rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
-                 log_images_kwargs=None, disable_local_logging=False):
+                rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
+                log_images_kwargs=None, disable_local_logging=False):
         super().__init__()
         self.rescale = rescale
         self.batch_freq = batch_frequency
@@ -142,7 +150,7 @@ class ImageLogger(Callback):
 
     @rank_zero_only
     def log_local(self, save_dir, split, images,
-                  global_step, current_epoch, batch_idx):
+                global_step, current_epoch, batch_idx):
         """Save images to the specified directory with the given naming convention."""
         root = os.path.join(save_dir, "images", split)
         for k in images:
@@ -187,7 +195,7 @@ class ImageLogger(Callback):
 
             if not self.disable_local_logging:
                 self.log_local(pl_module.logger.save_dir, split, images,
-                               pl_module.global_step, pl_module.current_epoch, batch_idx)
+                            pl_module.global_step, pl_module.current_epoch, batch_idx)
 
             logger_log_images = self.logger_log_images.get(logger, lambda *args, **kwargs: None)
             logger_log_images(pl_module, images, pl_module.global_step, split)

@@ -1,4 +1,12 @@
-# src/data/preprocessing/data_modules.py
+"""
+src/data/preprocessing/data_modules.py
+=======================================================================
+Code adapted from https://github.com/CompVis/latent-diffusion.
+License provided below.
+=======================================================================
+MIT License
+Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
+"""
 import os
 from functools import partial
 import numpy as np
@@ -104,8 +112,8 @@ class DataModuleFromConfig(pl.LightningDataModule):
         else:
             init_fn = None
         return DataLoader(self.datasets["train"], batch_size=self.batch_size,
-                          num_workers=self.num_workers, persistent_workers=self.persistent_workers, shuffle=False if is_iterable_dataset else True,
-                          worker_init_fn=init_fn, pin_memory=self.pin_memory)
+                        num_workers=self.num_workers, persistent_workers=self.persistent_workers, shuffle=False if is_iterable_dataset else True,
+                        worker_init_fn=init_fn, pin_memory=self.pin_memory)
 
     def _val_dataloader(self, shuffle=False):
         """generate the validation dataloader(s)"""

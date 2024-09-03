@@ -1,3 +1,6 @@
+"""
+src.util.compute_hmin_hmax
+"""
 import pickle as pkl
 import os
 import numpy as np

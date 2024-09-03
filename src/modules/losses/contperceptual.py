@@ -1,4 +1,12 @@
-# src/modules/losses/contperceptual.py
+"""
+src/modules/losses/contperceptual.py
+=======================================================================
+Code adapted from https://github.com/CompVis/latent-diffusion.
+License provided below.
+=======================================================================
+MIT License
+Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
+"""
 import math
 import pickle as pkl
 import torch
@@ -10,11 +18,6 @@ from src.data.specs import POSE_DIM, LHW_DIM, FILL_FACTOR_DIM, BACKGROUND_CLASS_
 from src.util.distributions import DiagonalGaussianDistribution
 from ldm.modules.losses.contperceptual import LPIPSWithDiscriminator as LPIPSWithDiscriminator_LDM
 
-class LPIPSWithDiscriminator(LPIPSWithDiscriminator_LDM):
-    """LPIPS loss with discriminator."""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
 class PoseLoss(LPIPSWithDiscriminator_LDM):
     """LPIPS loss with discriminator."""
     def __init__(self, train_on_yaw=True, kl_weight_obj=1e-5, kl_weight_bbox=1e-2, 
