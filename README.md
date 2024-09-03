@@ -24,7 +24,7 @@ git clone REPOSITORY_URL
 cd generative-detection
 ```
 
-2. Create a new conda environment named `odvae` and activate it:
+2. (Optional) Create a new conda environment named `odvae` and activate it:
 ```bash
 conda create --name odvae
 conda activate odvae
@@ -38,11 +38,6 @@ bash setup.sh
 4. To initialize, fetch and checkout all the nested submodules:
 ```bash
 git submodule update --init --recursive
-```
-
-5. Install the Python package:
-```bash
-pip install -e .
 ```
 
 ## Prepare nuScenes Dataset [2]
