@@ -13,6 +13,8 @@ slurm_output
 .vscode
 images
 .logs
+images
+image
 *.png
 !figs/pipeline.png
 generate_and_submit_slurm.py
