@@ -67,7 +67,7 @@ python eval.py --model-file trained_checkpoints/odvae_waymo.pth --benchmark waym
 
 ## Pre-trained Models
 
-You can download our pretrained model here:
+You can download our pre-trained model here:
 - [OD-VAE]() trained on the nuScenes dataset [2] using parameters specified in the config file `configs/train_odvae_nusc.yaml`
 - [OD-VAE]() trained on the Waymo Open Dataset [3] using parameters specified in the config file `configs/train_odvae_waymo.yaml`
 
