@@ -1,7 +1,7 @@
 # OD-VAE: Inverting Generation for 3D Object Detection
 This repository is the official implementation of [OD-VAE: Inverting Generation for 3D Object Detection]().
 
-[arXiv]() | [BibTex](./CITATION.cff)
+[arXiv]() | [BibTex](./CITATION.cff) | [Project Page]()
 
 ![OD-VAE and Latent Variables of an 3D Object.](./figs/pipeline.png)
 
@@ -9,7 +9,6 @@ This repository is the official implementation of [OD-VAE: Inverting Generation 
 
 [Anonymous Author(s)]()
 
-[Demo link]()
 ## Requirements
 - This code has only been tested in the Linux operating system.
 - We used 4 NVIDIA A6000 GPUs for training, but this code should be compatible with any NVIDIA GPU of the Ampere or any later generation
