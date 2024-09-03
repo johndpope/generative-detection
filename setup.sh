@@ -8,14 +8,3 @@ conda install pytorch3d::pytorch3d
 
 # Install Python packages with pip (those managed in setup.py)
 pip install -e .
-
-# Alternatively, use pip to install remaining packages if setup.py does not cover them all
-# pip install mmengine
-# pip install "mmcv==2.0.0rc4" -f https://download.openmmlab.com/mmcv/dist/cu116/torch1.12.0/index.html
-# pip install mmdet3d
-# pip install mmdet
-# pip install -U openmim==0.3.8
-# pip install omegaconf
-# pip install einops
-# pip install taming-transformers-rom1504
-# pip install wandb
