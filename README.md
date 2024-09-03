@@ -90,7 +90,7 @@ Our model's performance is summarized in the tables below.
 
 
 ## Contributing
-The code in this repository is released under the [CC0 1.0 Universal](LICENSE). We welcome any contributions to our repository via pull requests. 
+The code in this repository is released under the [CC0 1.0 Universal](LICENSE) License. We welcome any contributions to our repository via pull requests. 
 
 ## Acknowledgements
 Our codebase for the architecture of training of the VAE builds heavily on the open-sourced repositories of [Latent Diffusion Models](https://github.com/CompVis/latent-diffusion/tree/a506df5756472e2ebaf9078affdde2c4f1502cd4) and [StyleGAN2](https://github.com/NVlabs/stylegan2-ada-pytorch). Thanks for open-sourcing!
