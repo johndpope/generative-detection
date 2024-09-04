@@ -721,6 +721,15 @@ class NuScenesBase(MMDetNuScenesDataset):
 
             patch_center_2d = torch.tensor(center_2d).float()
             ret.patch_center_2d = patch_center_2d
+
+            for key in ['item_label', 'attr label_2', 'bbox', 'bbox 2', 'bbox_3d', 'bbox_3d_2', 'bbox_3d isvalid', 
+                        'bbox_3d_isvalid_2', 'bbox_label_2', 'bbox_label_3d', 'bbox_label_3d_2', 'camera_params', 
+                        'camera_params_2', 'center_2d', 'center_2d_2', 'depth', 'depth_2', 'patch_center', 'patch_center_2', 
+                        'patch_center_2d_2', 'patch_center_2d_original', 'patch_center_2d_original_2', 'velocity', 'velocity_2']: 
+                ret[key] = None 
+            
+            for key in ['zoom_multiplier', 'zoom_multiplier_2', 'patch_size_2']: 
+                ret[key] = torch.tensor([])
             
         for key in ["cam_name", "img_path", "sample_data_token", "cam2img", "cam2ego", "class_name", "bbox_3d_gt_2", "lidar2cam", "bbox_3d_gt", "resampling_factor", "resampling_factor_2", "device", "image_size"]:
             value = ret[key]
