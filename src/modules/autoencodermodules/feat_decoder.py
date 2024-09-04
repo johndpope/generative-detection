@@ -10,42 +10,18 @@ Copyright (c) 2021, NVIDIA Corporation. All rights reserved.
 MIT License
 Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
 """
-# src/modules/autoencodermodules/feat_decoder.py
+
 import torch
 import torch.nn as nn
 import numpy as np
 from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample, nonlinearity, ResnetBlock
 from ldm.modules.diffusionmodules.model import Decoder as LDMDecoder
 from src.modules.autoencodermodules.adaptiveconv import SynthesisLayer as AdpativeConv2dLayer
+from src.utils.misc import PositionalEncoding
 
 class FeatDecoder(LDMDecoder):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, num_channels=13, num_frequencies=6): # TODO: class should not be an input here
-        super(PositionalEncoding, self).__init__()
-        self.num_channels = num_channels
-        self.num_frequencies = num_frequencies
-        
-        self.output_dim = num_channels * 2 * self.num_frequencies
-
-    def forward(self, x):
-        batch_size = x.shape[0]
-        x = x.unsqueeze(-1)  # Shape: (batch_size, 13, 1)
-        
-        # Prepare the frequency bands
-        frequencies = torch.arange(self.num_frequencies, dtype=torch.float32).to(x.device)
-        frequencies = 2 ** frequencies * torch.pi  # Shape: (6,)
-        
-        # Compute the positional encodings
-        sinusoids = torch.einsum('bix,f->bixf', x, frequencies)  # Shape: (batch_size, 13, 1, 6)
-        sinusoids = torch.cat([torch.sin(sinusoids), torch.cos(sinusoids)], dim=-1)  # Shape: (batch_size, 13, 1, 12)
-        
-        # Flatten the last two dimensions
-        sinusoids = sinusoids.view(batch_size, self.output_dim)  # Shape: (batch_size, 156)
-        
-        return sinusoids
 
 class AdaptiveFeatDecoder(nn.Module):
     def __init__(self, *, ch, out_ch, num_classes, pose_dim=13, w_dim=512, ch_mult=(1,2,4,8), num_res_blocks,
@@ -204,7 +180,7 @@ class AdaptiveFeatDecoder(nn.Module):
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks+1):
-                h = self.up[i_level].block[i_block](h, temb) # torch.Size([4, 512, 16, 16])
+                h = self.up[i_level].block[i_block](h, w, temb) if self.upsample_adaptive else self.up[i_level].block[i_block](h, temb) # torch.Size([4, 512, 16, 16])
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
