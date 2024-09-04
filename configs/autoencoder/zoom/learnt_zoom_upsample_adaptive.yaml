@@ -12,10 +12,10 @@ model:
     dropout_warmup_steps: 0
     train_on_yaw: True
     decoder_mid_adaptive: True
+    decoder_upsample_adaptive: True
     lossconfig:
       target: src.modules.losses.PoseLoss
       params:
-        pixel_loss_weight: 3.0
         use_mask_loss: False
         encoder_pretrain_steps: 0
         disc_start: 0
@@ -30,11 +30,12 @@ model:
         mask_weight: 0
         mask_loss_fn: "l2"
         disc_in_channels: 3
+        num_classes: 5
         dataset_stats_path: "dataset_stats/combined/all.pkl"
-
     pose_decoder_config:
       target: src.modules.autoencodermodules.pose_decoder.PoseDecoderSpatialVAE
       params: 
+        num_classes: 5
         num_channels: 16
         n: 16
         m: 16
@@ -42,7 +43,17 @@ model:
         num_layers: 2
         activation: tanh
         resid: False
-
+    
+    pose_encoder_config:
+      target: src.modules.autoencodermodules.pose_encoder.PoseEncoderSpatialVAE
+      params:
+        num_classes: 5
+        num_channels: 16
+        n: 16
+        m: 16
+        hidden_dim: 500
+        num_layers: 2
+        activation: swish
     ddconfig:
       double_z: True
       z_channels: 16
@@ -103,7 +114,7 @@ data:
         patch_height: 256
         patch_aspect_ratio: 1.0
         perturb_center: False
-        perturb_scale: True
+        perturb_scale: False
         perturb_prob: 0.0
         allow_zoomout: True
     test:

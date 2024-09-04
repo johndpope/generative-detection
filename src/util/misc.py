@@ -5,6 +5,32 @@ import logging
 import json
 import numpy as np
 import torch
+import torch.nn as nn
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, num_channels=13, num_frequencies=6):
+        super(PositionalEncoding, self).__init__()
+        self.num_channels = num_channels
+        self.num_frequencies = num_frequencies
+        
+        self.output_dim = num_channels * 2 * self.num_frequencies
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        x = x.unsqueeze(-1)  # Shape: (batch_size, 13, 1)
+        
+        # Prepare the frequency bands
+        frequencies = torch.arange(self.num_frequencies, dtype=torch.float32).to(x.device)
+        frequencies = 2 ** frequencies * torch.pi  # Shape: (6,)
+        
+        # Compute the positional encodings
+        sinusoids = torch.einsum('bix,f->bixf', x, frequencies)  # Shape: (batch_size, 13, 1, 6)
+        sinusoids = torch.cat([torch.sin(sinusoids), torch.cos(sinusoids)], dim=-1)  # Shape: (batch_size, 13, 1, 12)
+        
+        # Flatten the last two dimensions
+        sinusoids = sinusoids.view(batch_size, self.output_dim)  # Shape: (batch_size, 156)
+        
+        return sinusoids
 
 class EasyDict(dict):
     """

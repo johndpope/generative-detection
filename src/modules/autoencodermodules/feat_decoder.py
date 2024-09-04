@@ -10,51 +10,27 @@ Copyright (c) 2021, NVIDIA Corporation. All rights reserved.
 MIT License
 Copyright (c) 2022 Machine Vision and Learning Group, LMU Munich
 """
-# src/modules/autoencodermodules/feat_decoder.py
+
 import torch
 import torch.nn as nn
 import numpy as np
 from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample, nonlinearity, ResnetBlock
 from ldm.modules.diffusionmodules.model import Decoder as LDMDecoder
 from src.modules.autoencodermodules.adaptiveconv import SynthesisLayer as AdpativeConv2dLayer
+from src.util.misc import PositionalEncoding
 
 class FeatDecoder(LDMDecoder):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, num_channels=13, num_frequencies=6): # TODO: class should not be an input here
-        super(PositionalEncoding, self).__init__()
-        self.num_channels = num_channels
-        self.num_frequencies = num_frequencies
-        
-        self.output_dim = num_channels * 2 * self.num_frequencies
-
-    def forward(self, x):
-        batch_size = x.shape[0]
-        x = x.unsqueeze(-1)  # Shape: (batch_size, 13, 1)
-        
-        # Prepare the frequency bands
-        frequencies = torch.arange(self.num_frequencies, dtype=torch.float32).to(x.device)
-        frequencies = 2 ** frequencies * torch.pi  # Shape: (6,)
-        
-        # Compute the positional encodings
-        sinusoids = torch.einsum('bix,f->bixf', x, frequencies)  # Shape: (batch_size, 13, 1, 6)
-        sinusoids = torch.cat([torch.sin(sinusoids), torch.cos(sinusoids)], dim=-1)  # Shape: (batch_size, 13, 1, 12)
-        
-        # Flatten the last two dimensions
-        sinusoids = sinusoids.view(batch_size, self.output_dim)  # Shape: (batch_size, 156)
-        
-        return sinusoids
-
 class AdaptiveFeatDecoder(nn.Module):
     def __init__(self, *, ch, out_ch, num_classes, pose_dim=13, w_dim=512, ch_mult=(1,2,4,8), num_res_blocks,
-                 attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
-                 resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
-                 attn_type="vanilla", pose_embedding_layers=1, 
-                 pose_embedding_map_hidden_dim=512, pe_num_frequencies=6, 
-                 mid_adaptive=True,
-                 **ignorekwargs):
+                attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
+                resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
+                attn_type="vanilla", pose_embedding_layers=1, 
+                pose_embedding_map_hidden_dim=512, pe_num_frequencies=6, 
+                mid_adaptive=True, upsample_adaptive=False, 
+                **ignorekwargs):
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -76,6 +52,7 @@ class AdaptiveFeatDecoder(nn.Module):
             self.z_shape, np.prod(self.z_shape)))
 
         self.mid_adaptive=mid_adaptive
+        self.upsample_adaptive=upsample_adaptive
 
         # z to block_in
         self.conv_in = AdpativeConv2dLayer(z_channels, # 16
@@ -83,8 +60,6 @@ class AdaptiveFeatDecoder(nn.Module):
                                             w_dim=w_dim,
                                             resolution=curr_res,
                                             kernel_size=3)
-            #                            stride=1,
-            #                            padding=1)
 
         # middle
         self.mid = nn.Module()
@@ -121,10 +96,18 @@ class AdaptiveFeatDecoder(nn.Module):
             attn = nn.ModuleList()
             block_out = ch*ch_mult[i_level]
             for i_block in range(self.num_res_blocks+1):
-                block.append(ResnetBlock(in_channels=block_in,
-                                        out_channels=block_out,
-                                        temb_channels=self.temb_ch,
-                                        dropout=dropout))
+                if self.upsample_adaptive:
+                    block.append(AdaptiveResnetBlock(in_channels=block_in,
+                                            resolution=curr_res,
+                                            out_channels=block_out,
+                                            temb_channels=self.temb_ch,
+                                            dropout=dropout))
+
+                else:
+                    block.append(ResnetBlock(in_channels=block_in,
+                                            out_channels=block_out,
+                                            temb_channels=self.temb_ch,
+                                            dropout=dropout))
                 block_in = block_out
                 if curr_res in attn_resolutions:
                     attn.append(make_attn(block_in, attn_type=attn_type))
@@ -197,7 +180,7 @@ class AdaptiveFeatDecoder(nn.Module):
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks+1):
-                h = self.up[i_level].block[i_block](h, temb) # torch.Size([4, 512, 16, 16])
+                h = self.up[i_level].block[i_block](h, w, temb) if self.upsample_adaptive else self.up[i_level].block[i_block](h, temb) # torch.Size([4, 512, 16, 16])
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
@@ -249,16 +232,13 @@ class AdaptiveResnetBlock(nn.Module):
                                                     w_dim=w_dim,
                                                     resolution=resolution,
                                                     kernel_size=3,)
-                                                   
+
             else:
-                assert self.use_conv_shortcut, "self.use_conv_shortcut must be True, but is set to False here."
-                self.nin_shortcut = torch.nn.Conv2d(in_channels,
+                self.nin_shortcut = AdpativeConv2dLayer(in_channels,
                                                     out_channels,
-                                                    # w_dim=w_dim,
-                                                    # resolution=resolution,
-                                                    kernel_size=1,#)
-                                                    stride=1,
-                                                    padding=0)
+                                                    w_dim=w_dim,
+                                                    resolution=resolution,
+                                                    kernel_size=1)
 
     def forward(self, x, w, temb):
         

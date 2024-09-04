@@ -475,7 +475,7 @@ class NuScenesBase(MMDetNuScenesDataset):
         else:
             cam_instance.patch_center_2d = cam_instance.center_2d
         
-        # Crop patch from origibal image
+        # Crop patch from original image
         patch, patch_center_2d, patch_size_original, resampling_factor, padding_pixels_resampled, mask_2d_bbox = self._get_instance_patch(img_path, cam_instance)
         
         if patch is None or patch_size_original is None:
