@@ -38,7 +38,7 @@ def compute_z_crop(H, H_crop, x, y, z, multiplier, eps=1e-8):
     z_crop = z_crop.reshape_as(z)
     return z_crop
 
-def get_perturbed_z_second_pose_lists(pose_gt, second_pose, num_perturbations=5, min_multiplier=0.75, max_multiplier=1.5):
+def get_perturbed_z_second_pose_lists(pose_gt, second_pose, num_perturbations=10, min_multiplier=0.75, max_multiplier=1.5):
     perturbed_poses = []
 
     # Unperturbed pose (original second pose)
@@ -52,8 +52,9 @@ def get_perturbed_z_second_pose_lists(pose_gt, second_pose, num_perturbations=5,
     H, W = 256, 256
 
     # Perturb only the z-coordinate using evenly spaced multipliers
-    z_min = -3
-    z_max = 3
+    z_min = -1.5
+    z_max = 1.5
+    # TODO: change fill factor!!
     z_crop_list = torch.linspace(z_min, z_max, steps=num_perturbations)
     for i, multiplier in enumerate(multipliers):
         perturbed_pose = second_pose.clone()
@@ -109,7 +110,6 @@ def get_second_pose_lists(pose_gt, second_pose, num_points=4, grid_size=5):
     second_poses_lists = torch.cat((second_poses_lists_between, second_poses_lists_grid), dim=0)
     
     return second_poses_lists
-
 def save_output(output, output_path, rescale=False):
     if rescale:
         output = (output + 1.0) / 2.0
@@ -129,7 +129,7 @@ def save_lists_output(pred_obj_lists, inference_pose_lists):
         image_path = f"./image/image_{x}_{y}_{z}.png"
         save_output(pred_obj, image_path, rescale=True)
 
-def inference_second_pose_lists(model, batch, num_points=6):
+def inference_second_pose_lists(model, batch, num_points=10):
     pred_obj_lists = []
     inference_pose_lists = []
     with torch.no_grad():
@@ -215,5 +215,6 @@ def main():
         save_lists_output(pred_obj_lists, inference_pose_lists)
         plot_images_side_by_side(inference_pose_lists, num_images=len(pred_obj_lists), idx=idx)
         batch = next(iteration)
+        idx +=1
 if __name__ == "__main__":
     main()

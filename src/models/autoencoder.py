@@ -703,6 +703,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
                 quantize_obj=False,
                 quantize_pose=False,
                 decoder_mid_adaptive=True,
+                decoder_upsample_adaptive=False,
                 **kwargs
                 ):
         pl.LightningModule.__init__(self)
@@ -762,6 +763,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         # Decoder Setup
         decoder_cfg = ddconfig.copy()
         decoder_cfg["mid_adaptive"] = decoder_mid_adaptive
+        decoder_cfg["upsample_adaptive"] = decoder_upsample_adaptive
         decoder_cfg["num_classes"] = lossconfig["params"]["num_classes"]
         self.decoder = AdaptiveFeatDecoder(**decoder_cfg)
         
