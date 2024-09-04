@@ -699,8 +699,8 @@ class NuScenesBase(MMDetNuScenesDataset):
             ret.class_name = LABEL_ID2NAME[LABEL_NAME2ID['background']]
             ret.patch_size = torch.tensor(self.patch_size_return, dtype=torch.float32).unsqueeze(0) # torch.Size([1, 2])
             ret.patch_center_2d = torch.tensor([self.patch_size_return[0] // 2,self.patch_size_return[1] // 2], dtype=torch.float32)
-            ret.pose_6d_perturbed = torch.zeros(POSE_DIM, dtype=torch.float32).unsqueeze(0)
-            ret.yaw_perturbed = 0.0
+            # ret.pose_6d_perturbed = torch.zeros(POSE_DIM, dtype=torch.float32).unsqueeze(0)
+            # ret.yaw_perturbed = 0.0
             ret.bbox_label = LABEL_NAME2ID['background']
             camera_params = {
                 "focal_length": torch.tensor([0.0], dtype=torch.float32),
@@ -722,14 +722,12 @@ class NuScenesBase(MMDetNuScenesDataset):
             patch_center_2d = torch.tensor(center_2d).float()
             ret.patch_center_2d = patch_center_2d
 
-            for key in ['item_label', 'attr label_2', 'bbox', 'bbox 2', 'bbox_3d', 'bbox_3d_2', 'bbox_3d isvalid', 
-                        'bbox_3d_isvalid_2', 'bbox_label_2', 'bbox_label_3d', 'bbox_label_3d_2', 'camera_params', 
-                        'camera_params_2', 'center_2d', 'center_2d_2', 'depth', 'depth_2', 'patch_center', 'patch_center_2', 
-                        'patch_center_2d_2', 'patch_center_2d_original', 'patch_center_2d_original_2', 'velocity', 'velocity_2']: 
-                ret[key] = None 
-            
-            for key in ['zoom_multiplier', 'zoom_multiplier_2', 'patch_size_2']: 
-                ret[key] = torch.tensor([])
+            for key in ['attr_label', 'attr_label_2', 'bbox', 'bbox_2', 'bbox_3d', 'bbox_3d_2', 'bbox_3d_isvalid', \
+                        'bbox_3d_isvalid_2', 'bbox_label_2', 'bbox_label_3d', 'bbox_label_3d_2', 'camera_params', \
+                        'camera_params_2', 'center_2d', 'center_2d_2', 'depth', 'depth_2', 'patch_center', 'patch_center_2', \
+                        'patch_center_2d_2', 'patch_center_2d_original', 'patch_center_2d_original_2', 'velocity', 'velocity_2', \
+                        'zoom_multiplier', 'zoom_multiplier_2', 'patch_size_2']:
+                ret[key] = self.default_value(key)
             
         for key in ["cam_name", "img_path", "sample_data_token", "cam2img", "cam2ego", "class_name", "bbox_3d_gt_2", "lidar2cam", "bbox_3d_gt", "resampling_factor", "resampling_factor_2", "device", "image_size"]:
             value = ret[key]
@@ -818,6 +816,31 @@ class NuScenesBase(MMDetNuScenesDataset):
         patch_center_2d = torch.tensor(patch_center, dtype=torch.float32)
         patch_sizes = torch.tensor(pacth_wh, dtype=torch.float32)
         return patches_cropped, patch_center_2d, patch_sizes
+
+    def default_value(self, key): #hardcode, ugly
+        if "patch_size" in key:
+            return torch.tensor([[0, 0]])
+        if "patch_center_2d" in key or "velocity" in key:
+            return [0, 0]
+        elif "center" in key:
+            return (0, 0)
+        
+        if "camera_params" in key:
+            return {'focal_length': torch.tensor([0.]), 'principal_point': torch.tensor([[0., 0.]]), 'znear': 0.0, 'device': 'cpu', 'zfar': 0.0, 'image_size': [(0, 0)]}
+        
+        if "isvalid" in key:
+            return False
+        if "label" in key:
+            return 0
+        if "bbox_3d" in key:
+            return [0, 0, 0, 0, 0, 0, 0]
+        if "bbox" in key:
+            return [0, 0, 0, 0]
+
+        if "zoom" in key:
+            return torch.tensor(0)
+        else:
+            return 0
 
 @DATASETS.register_module()
 class NuScenesTrain(NuScenesBase):
