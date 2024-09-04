@@ -17,7 +17,7 @@ import numpy as np
 from ldm.modules.diffusionmodules.model import Normalize, make_attn, Upsample, nonlinearity, ResnetBlock
 from ldm.modules.diffusionmodules.model import Decoder as LDMDecoder
 from src.modules.autoencodermodules.adaptiveconv import SynthesisLayer as AdpativeConv2dLayer
-from src.utils.misc import PositionalEncoding
+from src.util.misc import PositionalEncoding
 
 class FeatDecoder(LDMDecoder):
     def __init__(self, **kwargs):
