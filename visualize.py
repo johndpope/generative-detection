@@ -14,6 +14,8 @@ from ldm.util import instantiate_from_config
 from train import get_data
 from pytorch_lightning.utilities.seed import seed_everything
 
+PATCH_ANCHOR_SIZES = [50, 100, 200, 400]
+
 def compute_z_crop(H, H_crop, x, y, z, multiplier, eps=1e-8):
     """
     Compute the cropped z-coordinate of an object given its 3D coordinates.
@@ -38,38 +40,64 @@ def compute_z_crop(H, H_crop, x, y, z, multiplier, eps=1e-8):
     z_crop = z_crop.reshape_as(z)
     return z_crop
 
-def get_perturbed_z_second_pose_lists(pose_gt, second_pose, num_perturbations=10, min_multiplier=0.75, max_multiplier=1.5):
+def get_min_max_multipliers(patch_size_original):
+    # Find the index of patch_size_original
+    patch_size_original = patch_size_original.max()
+    index = PATCH_ANCHOR_SIZES.index(patch_size_original)
+
+    # Determine the next smallest and next biggest sizes
+    next_smallest = PATCH_ANCHOR_SIZES[index - 1] if index > 0 else None
+    next_biggest = PATCH_ANCHOR_SIZES[index + 1] if index < len(PATCH_ANCHOR_SIZES) - 1 else None
+
+    # Determine the threshold values
+    lower_threshold = (patch_size_original + next_smallest) / 2 if next_smallest else patch_size_original
+    upper_threshold = (patch_size_original + next_biggest) / 2 if next_biggest else patch_size_original
+
+    # Function to find the multipliers
+    def find_multipliers(patch_size_original, lower_threshold, upper_threshold):
+        m_min = lower_threshold / patch_size_original
+        m_max = upper_threshold / patch_size_original
+        return m_min, m_max
+
+    m_min, m_max = find_multipliers(patch_size_original, lower_threshold, upper_threshold)
+    
+    return m_min, m_max
+
+def get_perturbed_z_second_pose_lists(pose_gt, second_pose, fill_factor_gt, patch_size_original, num_perturbations=10):
     perturbed_poses = []
 
+    # second_pose = torch.cat((snd_pose, snd_bbox, snd_fill, class_probs), dim=1)
+    last_dim = len(second_pose[0]) - (4+3+1)
+    snd_pose, snd_bbox, snd_fill, class_probs = torch.split(second_pose, [4, 3, 1, last_dim], dim=1)
+    pose_gt_full = torch.cat((pose_gt, snd_bbox, fill_factor_gt.unsqueeze(0), class_probs), dim=1)
     # Unperturbed pose (original second pose)
-    unperturbed_pose = second_pose.clone()
-    perturbed_poses.append(unperturbed_pose)
-
-    # Generate evenly spaced multipliers
-    multipliers = torch.linspace(min_multiplier, max_multiplier, steps=num_perturbations)
+    unperturbed_pose = pose_gt_full.clone() # pose 1
+    perturbed_poses.append(unperturbed_pose) 
 
     # Original image dimensions
-    H, W = 256, 256
-
+    
+    m_min, m_max = get_min_max_multipliers(patch_size_original=patch_size_original)
+    
+    # Generate evenly spaced multipliers
+    multipliers = torch.linspace(m_min, m_max, steps=num_perturbations)
+    H, W = patch_size_original[0,0,0], patch_size_original[0,0,1]
     # Perturb only the z-coordinate using evenly spaced multipliers
-    z_min = -1.5
-    z_max = 1.5
-    # TODO: change fill factor!!
-    z_crop_list = torch.linspace(z_min, z_max, steps=num_perturbations)
-    for i, multiplier in enumerate(multipliers):
-        perturbed_pose = second_pose.clone()
-
+    for multiplier in multipliers:
+        perturbed_pose = pose_gt_full.clone()
         # Use the compute_z_crop function to calculate the new z value
-        # z_crop = compute_z_crop(H=H, H_crop=H * multiplier, x=perturbed_pose[0, 0], y=perturbed_pose[0, 1], z=perturbed_pose[0, 2], multiplier=multiplier)
-        z_crop = z_crop_list[i]
+        z_crop = compute_z_crop(H=H, H_crop=H * multiplier, x=perturbed_pose[0, 0], y=perturbed_pose[0, 1], z=perturbed_pose[0, 2], multiplier=multiplier)
+        
         # Update the z value of the perturbed pose
         perturbed_pose[0, 2] = z_crop
+        fill_factor_crop = fill_factor_gt * multiplier 
 
+        # fill factor id
+        perturbed_pose[0, 7] = fill_factor_crop
         # Add the perturbed pose to the list
         perturbed_poses.append(perturbed_pose)
-    
+
     # Combine all poses into a single tensor
-    second_poses_lists = torch.cat(perturbed_poses, dim=0)
+    second_poses_lists = torch.cat(perturbed_poses, dim=0) # (num_perturbations, 1, 6)
     
     return second_poses_lists
 
@@ -137,8 +165,12 @@ def inference_second_pose_lists(model, batch, num_points=10):
         save_output(rgb_in, "./image/input.png", True)
         save_output(rgb_gt, "./image/gt.png", True)
         # second_poses_lists = get_second_pose_lists(pose_gt, second_pose, num_points)
-        second_poses_lists = get_perturbed_z_second_pose_lists(pose_gt, second_pose, num_points)
-        for pose in second_poses_lists:
+        second_poses_lists = get_perturbed_z_second_pose_lists(pose_gt=pose_gt, 
+                                                                second_pose=second_pose,
+                                                                fill_factor_gt=fill_factor_gt,
+                                                                patch_size_original=batch['patch_size'],
+                                                                num_perturbations=num_points)
+        for i, pose in enumerate(second_poses_lists):
             pred_obj, dec_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose = model(rgb_in, pose_gt, second_pose=pose.unsqueeze(0))
             pred_obj_lists.append(pred_obj)
             inference_pose_lists.append(pose.unsqueeze(0))
