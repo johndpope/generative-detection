@@ -131,6 +131,8 @@ class PoseLoss(LPIPSWithDiscriminator_LDM):
         return pose_loss, weighted_pose_loss, t1_loss, t2_loss, t3_loss, v3_loss
 
     def _get_rec_loss(self, rgb_inputs, rgb_inputs_cropped, rgb_reconstructions, rgb_reconstructions_cropped, use_pixel_loss, mask_2d_bbox=None):
+        rgb_inputs_cropped = rgb_inputs if rgb_inputs_cropped is None else rgb_inputs_cropped
+        rgb_reconstructions_cropped = rgb_reconstructions if rgb_reconstructions_cropped is None else rgb_reconstructions_cropped
         # MSE RGB
         if use_pixel_loss:
             # Compute pixel-wise reconstruction only inside 2d bbox

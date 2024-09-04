@@ -18,6 +18,7 @@ image
 *.png
 !figs/pipeline.png
 generate_and_submit_slurm.py
+inverse_refinement
 dnnlib
 torch_utils
 submodules

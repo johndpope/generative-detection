@@ -18,15 +18,15 @@ def load_model(config, ckpt_path):
     return model
 
 def main():
-    config_path = "configs/autoencoder/4_adaptive_conv/learnt_shift_mini.yaml"
-    checkpoint_path = "logs/2024-08-23T05-06-58_learnt_shift/checkpoints/last.ckpt"
+    config_path = "configs/autoencoder/shift/learnt_shift.yaml"
+    checkpoint_path = "logs/2024-08-30T10-54-21_learnt_shift/checkpoints/last.ckpt"
     config = OmegaConf.load(config_path)
 
     model = load_model(config, checkpoint_path)
     model.eval()
 
     data = get_data(config)
-    iteration = iter(data.datasets['train'])
+    iteration = iter(data.datasets['validation'])
 
     counter = 0
     while True:
@@ -37,8 +37,8 @@ def main():
         model.chunk_size = 1
         model.class_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
         model.fill_factor_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
-        model.num_refinement_steps = 5
-        model.ref_lr=5.0e-2
+        model.num_refinement_steps = 10
+        model.ref_lr=1.0e-1
         model.tv_loss_weight = 1.0e-4
 
         # Prepare Input
@@ -129,16 +129,24 @@ def main():
             img = img / img.max()
             return img
         
-        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses, gt_x, gt_y)
+        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses, gt_x, gt_y)
         # save input_patches
-        save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches_{counter}_gt.png")
+        os.makedirs(f"{save_dir}/input_patches", exist_ok=True)
+        save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches/{counter}_gt.png")
         plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix="gt")
         save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_gt.png")
-        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
-        save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches_{counter}_pred.png")
+        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list_2 = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
+        save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches/{counter}_pred.png")
         plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix="pred")
         save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_pred.png")
-        
+
+        for i in range(len(gen_image_list)):
+            os.makedirs(f"{save_dir}/gen_image_gt/{counter}", exist_ok=True)
+            save_image(scale_to_0_1(gen_image_list[i]), f"{save_dir}/gen_image_gt/{counter}/pred_{i}.png")
+
+        for i in range(len(gen_image_list_2)):
+            os.makedirs(f"{save_dir}/gen_image_pred/{counter}", exist_ok=True)
+            save_image(scale_to_0_1(gen_image_list_2[i]), f"{save_dir}/gen_image_pred/{counter}/pred_{i}.png")
         counter += 1
 
 if __name__ == "__main__":

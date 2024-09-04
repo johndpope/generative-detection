@@ -870,8 +870,8 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         if True: # TODO: for debug only
             if gt_x is not None and gt_y is not None:
                 refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
-                refined_pose_chosen[:, 0] = min(gt_x + 0.3, 1.0).reshape_as(refined_pose[:, 0])
-                refined_pose_chosen[:, 1] = min(gt_y + 0.3, 1.0).reshape_as(refined_pose[:, 1])
+                refined_pose_chosen[:, 0] = min(gt_x + 0.5, 1.0)
+                refined_pose_chosen[:, 1] = min(gt_y + 0.5, 1.0)
             else:
                 refined_pose_chosen = refined_pose[:, :2]
             
@@ -888,7 +888,7 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         grad_y_list = torch.zeros(self.num_refinement_steps)
         loss_list = torch.zeros(self.num_refinement_steps)
         tv_loss_list = torch.zeros(self.num_refinement_steps)
-
+        gen_image_list = torch.zeros_like(input_patches).repeat(self.num_refinement_steps, 1, 1, 1)
         # Run K iter refinement steps
         for k in range(self.num_refinement_steps):
             if True: # TODO: for debug only
@@ -901,7 +901,12 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             optim_refined.zero_grad()
             gen_pose = dec_pose
             gen_image = self.decode(z_obj, gen_pose)
-            rec_loss = self.loss._get_rec_loss(input_patches, gen_image, use_pixel_loss=True).mean()
+            # def _get_rec_loss(self, rgb_inputs, rgb_inputs_cropped, rgb_reconstructions, rgb_reconstructions_cropped, use_pixel_loss, mask_2d_bbox=None):
+            rec_loss = self.loss._get_rec_loss(rgb_inputs=input_patches, 
+                                                rgb_inputs_cropped=None, 
+                                                rgb_reconstructions=gen_image, 
+                                                rgb_reconstructions_cropped=None,
+                                                use_pixel_loss=True).mean()
             tv_loss = self._get_tv_loss(gen_image, weight=self.tv_loss_weight)
             refinement_loss = rec_loss + tv_loss
             refinement_loss.backward()
@@ -911,8 +916,9 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             grad_y_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
             loss_list[k] = refinement_loss.clone().squeeze()
             tv_loss_list[k] = tv_loss.clone().squeeze().detach()
+            gen_image_list[k] = gen_image.clone().detach()
         
         if True: # TODO: for debug only 
             refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
-        return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list
+        return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list
