@@ -9,16 +9,11 @@ wandb
 taming
 logs
 .out
-slurm_output
 .vscode
-images
 .logs
-images
-image
 *.png
 !figs/pipeline.png
 generate_and_submit_slurm.py
-inverse_refinement
 dnnlib
 torch_utils
 submodules

@@ -19,7 +19,6 @@ from ldm.models.autoencoder import AutoencoderKL
 from ldm.util import instantiate_from_config
 from ldm.modules.ema import LitEma
 from src.modules.autoencodermodules.feat_encoder import FeatEncoder
-from src.modules.autoencodermodules.feat_decoder import FeatDecoder, AdaptiveFeatDecoder
 from src.util.distributions import DiagonalGaussianDistribution
 from src.data.specs import LHW_DIM, POSE_6D_DIM, FILL_FACTOR_DIM, FINAL_PERTURB_RAD
 
@@ -30,6 +29,7 @@ class PoseAutoencoder(AutoencoderKL):
 
     def __init__(self,
                 ddconfig,
+                feat_decoder_config,
                 lossconfig,
                 embed_dim,
                 ckpt_path=None,
@@ -333,6 +333,8 @@ class PoseAutoencoder(AutoencoderKL):
     
     def get_class_input(self, batch, k):
         x = batch[k]
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x)
         return x
     
     def get_bbox_input(self, batch, k):
@@ -341,6 +343,8 @@ class PoseAutoencoder(AutoencoderKL):
         
     def get_fill_factor_input(self, batch, k):
         x = batch[k]
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x)
         return x
     
     def get_all_inputs(self, batch, postfix=""):
@@ -676,6 +680,7 @@ class PoseAutoencoder(AutoencoderKL):
 class AdaptivePoseAutoencoder(PoseAutoencoder):
     def __init__(self,
                 ddconfig,
+                feat_decoder_config,
                 lossconfig,
                 embed_dim,
                 ckpt_path=None,
@@ -761,11 +766,10 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         self.pose_decoder = instantiate_from_config(pose_decoder_config)
         
         # Decoder Setup
-        decoder_cfg = ddconfig.copy()
-        decoder_cfg["mid_adaptive"] = decoder_mid_adaptive
-        decoder_cfg["upsample_adaptive"] = decoder_upsample_adaptive
-        decoder_cfg["num_classes"] = lossconfig["params"]["num_classes"]
-        self.decoder = AdaptiveFeatDecoder(**decoder_cfg)
+        decoder_cfg = feat_decoder_config.copy()
+        decoder_cfg["params"]["num_classes"] = lossconfig["params"]["num_classes"]
+        print("DEBUG: Here!")
+        self.decoder = instantiate_from_config(decoder_cfg)
         
         # Dropout Setup
         self.dropout_prob_final = dropout_prob_final # 0.7
@@ -863,11 +867,12 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         return pred_obj, pred_pose, posterior_obj, bbox_posterior, q_loss, ind_obj, ind_pose
 
     @torch.enable_grad()
-    def _refinement_step(self, input_patches, z_obj, z_pose, gt_x=None, gt_y=None):
+    def _refinement_step(self, input_patches, z_obj, z_pose, gt_x=None, gt_y=None, gt_z=None, fill_factor_gt=None):
         # Initialize optimizer and parameters
         refined_pose = z_pose[:, :-self.num_classes]
         obj_class = z_pose[:, -self.num_classes:]
         if True: # TODO: for debug only
+            ## shift refinement only
             if gt_x is not None and gt_y is not None:
                 refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
                 refined_pose_chosen[:, 0] = min(gt_x + 0.5, 1.0)
@@ -877,6 +882,21 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             
             refined_pose_not_chosen = refined_pose[:, 2:]
             refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+
+            # ## scale refinement only
+            # if gt_z is not None and fill_factor_gt is not None:
+            #     refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
+            #     refined_pose_chosen[:, 0] = gt_z # position 2
+            #     refined_pose_chosen[:, 1] = fill_factor_gt # position 7
+            # else:
+            #     refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
+            #     refined_pose_chosen[:, 0] = refined_pose[:, 2] # position 2
+            #     refined_pose_chosen[:, 1] = refined_pose[:, 7] # position 7
+            # pose_shift = refined_pose[:, :2] # 0, 1
+            # pose_yaw = refined_pose[:, 3] # 3
+            # pose_bbox = refined_pose[:, 4:7] # 4, 5, 6
+            # refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+        
         else:
             refined_pose_chosen = refined_pose
             refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
@@ -884,8 +904,12 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
 
         x_list = torch.zeros(self.num_refinement_steps)
         y_list = torch.zeros(self.num_refinement_steps)
+        # z_list = torch.zeros(self.num_refinement_steps)
+        # fill_factor_list = torch.zeros(self.num_refinement_steps)
         grad_x_list = torch.zeros(self.num_refinement_steps)
         grad_y_list = torch.zeros(self.num_refinement_steps)
+        # grad_z_list = torch.zeros(self.num_refinement_steps)
+        # grad_fill_factor_list = torch.zeros(self.num_refinement_steps)
         loss_list = torch.zeros(self.num_refinement_steps)
         tv_loss_list = torch.zeros(self.num_refinement_steps)
         gen_image_list = torch.zeros_like(input_patches).repeat(self.num_refinement_steps, 1, 1, 1)
@@ -893,11 +917,19 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         for k in range(self.num_refinement_steps):
             if True: # TODO: for debug only
                 refined_pose_param_with_rest = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
+                # refined_z_param = refined_pose_param[:, 0]
+                # refined_fill_factor_param = refined_pose_param[:, 1]
+                # pose_shift = pose_shift.squeeze()
+                # pose_bbox = pose_bbox.squeeze()
+                # refined_pose_param_with_rest = torch.cat([pose_shift, refined_z_param, pose_yaw, pose_bbox, refined_fill_factor_param], dim=-1)
+                # refined_pose_param_with_rest = refined_pose_param_with_rest.unsqueeze(0)
                 dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
             else:
                 dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
             x_list[k] = refined_pose_param[:, 0].clone().squeeze()
             y_list[k] = refined_pose_param[:, 1].clone().squeeze()
+            # z_list[k] = refined_pose_param[:, 0].clone().squeeze()
+            # fill_factor_list[k] = refined_pose_param[:, 1].clone().squeeze()
             optim_refined.zero_grad()
             gen_pose = dec_pose
             gen_image = self.decode(z_obj, gen_pose)
@@ -914,11 +946,19 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             
             grad_x_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
             grad_y_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
+            # grad_z_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
+            # grad_fill_factor_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
             loss_list[k] = refinement_loss.clone().squeeze()
             tv_loss_list[k] = tv_loss.clone().squeeze().detach()
             gen_image_list[k] = gen_image.clone().detach()
         
         if True: # TODO: for debug only 
             refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
+        #     refined_z_param = refined_pose_param[:, 0]
+        #     refined_fill_factor_param = refined_pose_param[:, 1]
+        #     refined_pose = torch.cat([pose_shift, refined_z_param, pose_yaw, pose_bbox, refined_fill_factor_param], dim=-1)
+        # if refined_pose.dim() == 1:
+        #     refined_pose = refined_pose.unsqueeze(0)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
         return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list
+        # return dec_pose.data, gen_image, z_list, fill_factor_list, grad_z_list, grad_fill_factor_list, loss_list, tv_loss_list, gen_image_list
