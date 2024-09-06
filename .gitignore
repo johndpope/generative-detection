@@ -14,8 +14,6 @@ logs
 *.png
 !figs/pipeline.png
 generate_and_submit_slurm.py
-dnnlib
-torch_utils
 submodules
 */launch.json
 

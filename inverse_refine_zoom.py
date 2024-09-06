@@ -111,7 +111,7 @@ def main():
         model.fill_factor_thresh = 0.0 
         model.num_refinement_steps = 10
 
-        model.ref_lr=5.5e-2 # zoom + fill only
+        model.ref_lr=4.0e-2 # zoom + fill only
         model.tv_loss_weight = 1.0e-4
 
         # Prepare Input
