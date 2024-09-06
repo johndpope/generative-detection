@@ -69,26 +69,17 @@ def get_min_max_multipliers(patch_size_original):
     return m_min, m_max
 
 def get_perturbed_z_fill(pose_gt, second_pose, fill_factor_gt, patch_size_original):
-
-    # second_pose = torch.cat((snd_pose, snd_bbox, snd_fill, class_probs), dim=1)
     last_dim = len(second_pose[0]) - (4+3+1)
     snd_pose, snd_bbox, snd_fill, class_probs = torch.split(second_pose, [4, 3, 1, last_dim], dim=1)
     fill_factor_gt = torch.zeros_like(pose_gt[:, 0]) + fill_factor_gt
     pose_gt_full = torch.cat((pose_gt, snd_bbox, fill_factor_gt.unsqueeze(0), class_probs), dim=1)
     # Unperturbed pose (original second pose)
     unperturbed_pose = pose_gt_full.clone() # pose 1
-
-    # Original image dimensions
-    
-    # m_min, m_max = get_min_max_multipliers(patch_size_original=patch_size_original)
     
     # Generate evenly spaced multipliers
     H, W = patch_size_original[0,0], patch_size_original[0,1]
 
-    # 50% 0.75, remaining 1.5
     multiplier = 0.75 if torch.rand(1) < 0.5 else 1.5
-    # Perturb only the z-coordinate using evenly spaced multipliers
-    # for multiplier in multipliers:
     # Use the compute_z_crop function to calculate the new z value
     z_crop = compute_z_crop(H=H, H_crop=H * multiplier, x=pose_gt_full[:, 0], y=pose_gt_full[:, 1], z=pose_gt_full[:, 2], multiplier=multiplier)
     
@@ -116,10 +107,9 @@ def main():
             batch = next(iteration)
 
         model.chunk_size = 1
-        model.class_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
-        model.fill_factor_thresh = 0.0 # TODO: Set to 0.5 or other value that works on val set
+        model.class_thresh = 0.0 
+        model.fill_factor_thresh = 0.0 
         model.num_refinement_steps = 10
-        # model.ref_lr=1.0e-1 # shift only
 
         model.ref_lr=5.5e-2 # zoom + fill only
         model.tv_loss_weight = 1.0e-4
@@ -158,8 +148,6 @@ def main():
         all_z_objects = torch.cat(all_objects)
         all_z_poses = torch.cat(all_poses)
         patches_w_objs = input_patches[all_patch_indices]
-        # gt_x = batch[model.pose_key][0]
-        # gt_y = batch[model.pose_key][1]
         rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose = model.get_all_inputs(batch)
         gt_z = pose_gt[:, 2]
         gt_fill = fill_factor_gt
@@ -169,7 +157,6 @@ def main():
                                         patch_size_original=batch['patch_size'])
         save_dir = "images/inference_refinement_zoom"
         os.makedirs(save_dir, exist_ok=True)
-        # def plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix=""):
         def plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix=""):
 
             x_list = x_list.squeeze().detach().cpu().numpy()
