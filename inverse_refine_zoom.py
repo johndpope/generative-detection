@@ -93,8 +93,8 @@ def main():
     parser.add_argument('--checkpoint_path', type=str, default="logs/2024-08-30T10-55-19_learnt_zoom/checkpoints/last.ckpt", help='Path to the checkpoint file')
     parser.add_argument('--split', type=str, choices=['train', 'validation', 'test'], default='validation', help='Data split to use')
     parser.add_argument('--num_refinement_steps', type=int, default=20, help='Number of refinement steps')
-    parser.add_argument('--ref_lr', type=float, default=2.0e-2, help='Learning rate for refinement')
-    parser.add_argument('--tv_loss_weight', type=float, default=1.0e-4, help='Weight for total variation loss')
+    parser.add_argument('--ref_lr', type=float, default=3.0e-2, help='Learning rate for refinement')
+    parser.add_argument('--tv_loss_weight', type=float, default=2.0e-4, help='Weight for total variation loss')
     parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
     args = parser.parse_args()
