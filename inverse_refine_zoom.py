@@ -2,6 +2,7 @@
 import os
 import matplotlib.pyplot as plt
 import torch
+import argparse
 from omegaconf import OmegaConf
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
@@ -11,15 +12,14 @@ from ldm.util import instantiate_from_config
 from train import get_data
 from pytorch_lightning.utilities.seed import seed_everything
 
+PATCH_ANCHOR_SIZES = [50, 100, 200, 400]
+
 def load_model(config, ckpt_path):
     model = instantiate_from_config(config.model)
     checkpoint = torch.load(ckpt_path, map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint['state_dict'])
     model.eval()
     return model
-
-
-PATCH_ANCHOR_SIZES = [50, 100, 200, 400]
 
 def compute_z_crop(H, H_crop, x, y, z, multiplier, eps=1e-8):
     """
@@ -88,17 +88,24 @@ def get_perturbed_z_fill(pose_gt, second_pose, fill_factor_gt, patch_size_origin
     return z_crop, fill_factor_crop
 
 def main():
-    seed = 42
-    seed_everything(seed)
-    config_path = "configs/autoencoder/zoom/learnt_zoom.yaml"
-    checkpoint_path = "logs/2024-08-30T10-55-19_learnt_zoom/checkpoints/last.ckpt"
-    config = OmegaConf.load(config_path)
+    parser = argparse.ArgumentParser(description='Inverse Refinement')
+    parser.add_argument('--config_path', type=str, default="configs/autoencoder/zoom/learnt_zoom.yaml", help='Path to the config file')
+    parser.add_argument('--checkpoint_path', type=str, default="logs/2024-08-30T10-55-19_learnt_zoom/checkpoints/last.ckpt", help='Path to the checkpoint file')
+    parser.add_argument('--split', type=str, choices=['train', 'validation', 'test'], default='validation', help='Data split to use')
+    parser.add_argument('--num_refinement_steps', type=int, default=20, help='Number of refinement steps')
+    parser.add_argument('--ref_lr', type=float, default=2.0e-2, help='Learning rate for refinement')
+    parser.add_argument('--tv_loss_weight', type=float, default=1.0e-4, help='Weight for total variation loss')
+    parser.add_argument('--seed', type=int, default=42, help='Seed for reproducibility')
 
-    model = load_model(config, checkpoint_path)
+    args = parser.parse_args()
+
+    seed_everything(args.seed)
+    config = OmegaConf.load(args.config_path)
+    model = load_model(config, args.checkpoint_path)
     model.eval()
 
     data = get_data(config)
-    iteration = iter(data.datasets['validation'])
+    iteration = iter(data.datasets[args.split])
 
     counter = 0
     while True:
@@ -109,10 +116,10 @@ def main():
         model.chunk_size = 1
         model.class_thresh = 0.0 
         model.fill_factor_thresh = 0.0 
-        model.num_refinement_steps = 10
+        model.num_refinement_steps = args.num_refinement_steps
 
-        model.ref_lr=4.0e-2 # zoom + fill only
-        model.tv_loss_weight = 1.0e-4
+        model.ref_lr = args.ref_lr # zoom + fill only
+        model.tv_loss_weight = args.tv_loss_weight
 
         # Prepare Input
         input_patches = batch[model.image_rgb_key].to(model.device).unsqueeze(0) # torch.Size([B, 3, 256, 256])
