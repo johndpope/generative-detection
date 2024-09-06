@@ -9,6 +9,7 @@ from src.util.misc import set_submodule_paths
 set_submodule_paths(submodule_dir="submodules")
 from ldm.util import instantiate_from_config
 from train import get_data
+from pytorch_lightning.utilities.seed import seed_everything
 
 def load_model(config, ckpt_path):
     model = instantiate_from_config(config.model)
@@ -70,36 +71,34 @@ def get_min_max_multipliers(patch_size_original):
 def get_perturbed_z_fill(pose_gt, second_pose, fill_factor_gt, patch_size_original):
 
     # second_pose = torch.cat((snd_pose, snd_bbox, snd_fill, class_probs), dim=1)
-    last_dim = len(second_pose) - (4+3+1)
-    snd_pose, snd_bbox, snd_fill, class_probs = torch.split(second_pose, [4, 3, 1, last_dim], dim=0)
-    fill_factor_gt = torch.zeros_like(pose_gt[0]) + fill_factor_gt
-    pose_gt_full = torch.cat((pose_gt, snd_bbox, fill_factor_gt.unsqueeze(0), class_probs), dim=0)
+    last_dim = len(second_pose[0]) - (4+3+1)
+    snd_pose, snd_bbox, snd_fill, class_probs = torch.split(second_pose, [4, 3, 1, last_dim], dim=1)
+    fill_factor_gt = torch.zeros_like(pose_gt[:, 0]) + fill_factor_gt
+    pose_gt_full = torch.cat((pose_gt, snd_bbox, fill_factor_gt.unsqueeze(0), class_probs), dim=1)
     # Unperturbed pose (original second pose)
     unperturbed_pose = pose_gt_full.clone() # pose 1
 
     # Original image dimensions
     
-    m_min, m_max = get_min_max_multipliers(patch_size_original=patch_size_original)
+    # m_min, m_max = get_min_max_multipliers(patch_size_original=patch_size_original)
     
     # Generate evenly spaced multipliers
     H, W = patch_size_original[0,0], patch_size_original[0,1]
-    multiplier = m_min
+
+    # 50% 0.75, remaining 1.5
+    multiplier = 0.75 if torch.rand(1) < 0.5 else 1.5
     # Perturb only the z-coordinate using evenly spaced multipliers
     # for multiplier in multipliers:
-    perturbed_pose = pose_gt_full.clone()
     # Use the compute_z_crop function to calculate the new z value
-    z_crop = compute_z_crop(H=H, H_crop=H * multiplier, x=perturbed_pose[0], y=perturbed_pose[1], z=perturbed_pose[2], multiplier=multiplier)
+    z_crop = compute_z_crop(H=H, H_crop=H * multiplier, x=pose_gt_full[:, 0], y=pose_gt_full[:, 1], z=pose_gt_full[:, 2], multiplier=multiplier)
     
-    # Update the z value of the perturbed pose
-    perturbed_pose[2] = z_crop
     fill_factor_crop = fill_factor_gt * multiplier 
-
-    # fill factor id
-    perturbed_pose[7] = fill_factor_crop
     
     return z_crop, fill_factor_crop
 
 def main():
+    seed = 42
+    seed_everything(seed)
     config_path = "configs/autoencoder/zoom/learnt_zoom.yaml"
     checkpoint_path = "logs/2024-08-30T10-55-19_learnt_zoom/checkpoints/last.ckpt"
     config = OmegaConf.load(config_path)
@@ -122,7 +121,7 @@ def main():
         model.num_refinement_steps = 10
         # model.ref_lr=1.0e-1 # shift only
 
-        model.ref_lr=1.0e-2 # zoom + fill only
+        model.ref_lr=5.5e-2 # zoom + fill only
         model.tv_loss_weight = 1.0e-4
 
         # Prepare Input
@@ -162,7 +161,7 @@ def main():
         # gt_x = batch[model.pose_key][0]
         # gt_y = batch[model.pose_key][1]
         rgb_in, rgb_gt, pose_gt, segm_mask_gt, mask_2d_bbox, class_gt, class_gt_label, bbox_gt, fill_factor_gt, second_pose = model.get_all_inputs(batch)
-        gt_z = pose_gt[2]
+        gt_z = pose_gt[:, 2]
         gt_fill = fill_factor_gt
         perturbed_z, perturbed_fill = get_perturbed_z_fill(pose_gt=pose_gt,
                                         second_pose=second_pose,
@@ -222,13 +221,13 @@ def main():
             img = img / img.max()
             return img
         
-        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses, gt_x=None, gt_y=None, gt_z=perturbed_z, fill_factor_gt=perturbed_fill)
+        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list = model._refinement_step_zoom(patches_w_objs, all_z_objects, all_z_poses, gt_x=None, gt_y=None, gt_z=perturbed_z, fill_factor_gt=perturbed_fill)
         # save input_patches
         os.makedirs(f"{save_dir}/input_patches", exist_ok=True)
         save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches/{counter}_gt.png")
         plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_z, gt_fill, loss_list, tv_loss_list, post_fix="gt")
         save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_gt.png")
-        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list_2 = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
+        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list_2 = model._refinement_step_zoom(patches_w_objs, all_z_objects, all_z_poses)
         save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches/{counter}_pred.png")
         plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_z, gt_fill, loss_list, tv_loss_list, post_fix="pred")
         save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_pred.png")

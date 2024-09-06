@@ -129,13 +129,13 @@ def main():
             img = img / img.max()
             return img
         
-        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses, gt_x, gt_y)
+        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list = model._refinement_step_shift(patches_w_objs, all_z_objects, all_z_poses, gt_x, gt_y)
         # save input_patches
         os.makedirs(f"{save_dir}/input_patches", exist_ok=True)
         save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches/{counter}_gt.png")
         plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix="gt")
         save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_gt.png")
-        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list_2 = model._refinement_step(patches_w_objs, all_z_objects, all_z_poses)
+        dec_pose_refined, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list_2 = model._refinement_step_shift(patches_w_objs, all_z_objects, all_z_poses)
         save_image(scale_to_0_1(input_patches), f"{save_dir}/input_patches/{counter}_pred.png")
         plot_grads(x_list, grad_x_list, y_list, grad_y_list, gt_x, gt_y, loss_list, tv_loss_list, post_fix="pred")
         save_image(scale_to_0_1(gen_image), f"{save_dir}/gen_image_{counter}_pred.png")

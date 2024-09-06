@@ -320,9 +320,13 @@ class PoseAutoencoder(AutoencoderKL):
         if self.train_on_yaw:
             yaw = batch["yaw"+postfix]
             # place yaw at index 3
-            x[:, 3] = yaw
+            if x.dim() == 1:
+                x[3] = yaw
+            else:
+                x[:, 3] = yaw
         
         x = x.to(memory_format=torch.contiguous_format).float()
+        x = x.unsqueeze(0) if x.dim() == 1 else x
         return x
     
     def get_mask_input(self, batch, k):
@@ -339,12 +343,15 @@ class PoseAutoencoder(AutoencoderKL):
     
     def get_bbox_input(self, batch, k):
         x = batch[k]
+        x = x.unsqueeze(0) if x.dim() == 1 else x
         return x
         
     def get_fill_factor_input(self, batch, k):
         x = batch[k]
         if not isinstance(x, torch.Tensor):
             x = torch.tensor(x)
+        x = x.unsqueeze(0) if x.dim() == 0 else x
+        x = x.unsqueeze(1)
         return x
     
     def get_all_inputs(self, batch, postfix=""):
@@ -377,11 +384,12 @@ class PoseAutoencoder(AutoencoderKL):
             # Get respective pose for forward pass
             snd_pose = self.get_pose_input(batch, self.pose_key, postfix="_2").to(self.device) # torch.Size([4, 4]) #
             snd_bbox = self.get_bbox_input(batch, self.bbox_key).to(self.device) # torch.Size([4, 3]) 
-            snd_fill = self.get_fill_factor_input(batch, self.fill_factor_key+"_2").to(self.device).float().unsqueeze(1)
+            snd_fill = self.get_fill_factor_input(batch, self.fill_factor_key+"_2").to(self.device).float()
 
             # get one hot encoding for class_id - all classes in self.label_id2class_id.values
             num_classes = self.num_classes
             class_probs = torch.nn.functional.one_hot(class_gt, num_classes=num_classes).float()
+            class_probs = class_probs.unsqueeze(0) if class_probs.dim() == 1 else class_probs
             second_pose = torch.cat((snd_pose, snd_bbox, snd_fill, class_probs), dim=1)
             # Replace Segmentation Mask
             segm_mask_gt = self.get_mask_input(batch, self.image_mask_key) # None
@@ -768,7 +776,6 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         # Decoder Setup
         decoder_cfg = feat_decoder_config.copy()
         decoder_cfg["params"]["num_classes"] = lossconfig["params"]["num_classes"]
-        print("DEBUG: Here!")
         self.decoder = instantiate_from_config(decoder_cfg)
         
         # Dropout Setup
@@ -871,45 +878,63 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         # Initialize optimizer and parameters
         refined_pose = z_pose[:, :-self.num_classes]
         obj_class = z_pose[:, -self.num_classes:]
-        if True: # TODO: for debug only
-            ## shift refinement only
-            if gt_x is not None and gt_y is not None:
-                refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
-                refined_pose_chosen[:, 0] = min(gt_x + 0.5, 1.0)
-                refined_pose_chosen[:, 1] = min(gt_y + 0.5, 1.0)
-            else:
-                refined_pose_chosen = refined_pose[:, :2]
-            
-            refined_pose_not_chosen = refined_pose[:, 2:]
-            refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+    
+        refined_pose_chosen = refined_pose
+        refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+        optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
 
-            # ## scale refinement only
-            # if gt_z is not None and fill_factor_gt is not None:
-            #     refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
-            #     refined_pose_chosen[:, 0] = gt_z # position 2
-            #     refined_pose_chosen[:, 1] = fill_factor_gt # position 7
-            # else:
-            #     refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
-            #     refined_pose_chosen[:, 0] = refined_pose[:, 2] # position 2
-            #     refined_pose_chosen[:, 1] = refined_pose[:, 7] # position 7
-            # pose_shift = refined_pose[:, :2] # 0, 1
-            # pose_yaw = refined_pose[:, 3] # 3
-            # pose_bbox = refined_pose[:, 4:7] # 4, 5, 6
-            # refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+        loss_list = torch.zeros(self.num_refinement_steps)
+        tv_loss_list = torch.zeros(self.num_refinement_steps)
+        gen_image_list = torch.zeros_like(input_patches).repeat(self.num_refinement_steps, 1, 1, 1)
+        # Run K iter refinement steps
+        for k in range(self.num_refinement_steps):
+            dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
+            optim_refined.zero_grad()
+            gen_pose = dec_pose
+            gen_image = self.decode(z_obj, gen_pose)
+            
+            rec_loss = self.loss._get_rec_loss(rgb_inputs=input_patches, 
+                                                rgb_inputs_cropped=None, 
+                                                rgb_reconstructions=gen_image, 
+                                                rgb_reconstructions_cropped=None,
+                                                use_pixel_loss=True).mean()
+            tv_loss = self._get_tv_loss(gen_image, weight=self.tv_loss_weight)
+            refinement_loss = rec_loss + tv_loss
+            refinement_loss.backward()
+            optim_refined.step()
+            loss_list[k] = refinement_loss.clone().squeeze()
+            tv_loss_list[k] = tv_loss.clone().squeeze().detach()
+            gen_image_list[k] = gen_image.clone().detach()
         
+        dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
+        return dec_pose.data, gen_image, loss_list, tv_loss_list, gen_image_list
+    
+    @torch.enable_grad()
+    def _refinement_step_shift(self, input_patches, z_obj, z_pose, gt_x=None, gt_y=None, gt_z=None, fill_factor_gt=None):
+        # Initialize optimizer and parameters
+        refined_pose = z_pose[:, :-self.num_classes]
+        obj_class = z_pose[:, -self.num_classes:]
+
+        ## shift refinement only
+        if gt_x is not None and gt_y is not None:
+            refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
+            refined_pose_chosen[:, 0] = min(gt_x + 0.5, 1.0)
+            refined_pose_chosen[:, 1] = min(gt_y + 0.5, 1.0)
         else:
-            refined_pose_chosen = refined_pose
-            refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+            refined_pose_chosen = refined_pose[:, :2]
+        
+        refined_pose_not_chosen = refined_pose[:, 2:]
+        refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+
+        
         optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
 
         x_list = torch.zeros(self.num_refinement_steps)
         y_list = torch.zeros(self.num_refinement_steps)
-        # z_list = torch.zeros(self.num_refinement_steps)
-        # fill_factor_list = torch.zeros(self.num_refinement_steps)
+
         grad_x_list = torch.zeros(self.num_refinement_steps)
         grad_y_list = torch.zeros(self.num_refinement_steps)
-        # grad_z_list = torch.zeros(self.num_refinement_steps)
-        # grad_fill_factor_list = torch.zeros(self.num_refinement_steps)
+
         loss_list = torch.zeros(self.num_refinement_steps)
         tv_loss_list = torch.zeros(self.num_refinement_steps)
         gen_image_list = torch.zeros_like(input_patches).repeat(self.num_refinement_steps, 1, 1, 1)
@@ -917,23 +942,15 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
         for k in range(self.num_refinement_steps):
             if True: # TODO: for debug only
                 refined_pose_param_with_rest = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
-                # refined_z_param = refined_pose_param[:, 0]
-                # refined_fill_factor_param = refined_pose_param[:, 1]
-                # pose_shift = pose_shift.squeeze()
-                # pose_bbox = pose_bbox.squeeze()
-                # refined_pose_param_with_rest = torch.cat([pose_shift, refined_z_param, pose_yaw, pose_bbox, refined_fill_factor_param], dim=-1)
-                # refined_pose_param_with_rest = refined_pose_param_with_rest.unsqueeze(0)
                 dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
             else:
                 dec_pose = torch.cat([refined_pose_param, obj_class], dim=-1)
             x_list[k] = refined_pose_param[:, 0].clone().squeeze()
             y_list[k] = refined_pose_param[:, 1].clone().squeeze()
-            # z_list[k] = refined_pose_param[:, 0].clone().squeeze()
-            # fill_factor_list[k] = refined_pose_param[:, 1].clone().squeeze()
             optim_refined.zero_grad()
             gen_pose = dec_pose
             gen_image = self.decode(z_obj, gen_pose)
-            # def _get_rec_loss(self, rgb_inputs, rgb_inputs_cropped, rgb_reconstructions, rgb_reconstructions_cropped, use_pixel_loss, mask_2d_bbox=None):
+            
             rec_loss = self.loss._get_rec_loss(rgb_inputs=input_patches, 
                                                 rgb_inputs_cropped=None, 
                                                 rgb_reconstructions=gen_image, 
@@ -946,19 +963,78 @@ class AdaptivePoseAutoencoder(PoseAutoencoder):
             
             grad_x_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
             grad_y_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
-            # grad_z_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
-            # grad_fill_factor_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
             loss_list[k] = refinement_loss.clone().squeeze()
             tv_loss_list[k] = tv_loss.clone().squeeze().detach()
             gen_image_list[k] = gen_image.clone().detach()
         
-        if True: # TODO: for debug only 
-            refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
-        #     refined_z_param = refined_pose_param[:, 0]
-        #     refined_fill_factor_param = refined_pose_param[:, 1]
-        #     refined_pose = torch.cat([pose_shift, refined_z_param, pose_yaw, pose_bbox, refined_fill_factor_param], dim=-1)
-        # if refined_pose.dim() == 1:
-        #     refined_pose = refined_pose.unsqueeze(0)
+        refined_pose = torch.cat([refined_pose_param, refined_pose_not_chosen], dim=-1)
         dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
         return dec_pose.data, gen_image, x_list, y_list, grad_x_list, grad_y_list, loss_list, tv_loss_list, gen_image_list
-        # return dec_pose.data, gen_image, z_list, fill_factor_list, grad_z_list, grad_fill_factor_list, loss_list, tv_loss_list, gen_image_list
+    
+    @torch.enable_grad()
+    def _refinement_step_zoom(self, input_patches, z_obj, z_pose, gt_x=None, gt_y=None, gt_z=None, fill_factor_gt=None):
+        # Initialize optimizer and parameters
+        refined_pose = z_pose[:, :-self.num_classes]
+        obj_class = z_pose[:, -self.num_classes:]
+        
+        if gt_z is not None and fill_factor_gt is not None:
+            refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
+            refined_pose_chosen[:, 0] = gt_z # position 2
+            refined_pose_chosen[:, 1] = fill_factor_gt # position 7
+        else:
+            refined_pose_chosen = torch.zeros_like(refined_pose[:, :2])
+            refined_pose_chosen[:, 0] = refined_pose[:, 2] # position 2
+            refined_pose_chosen[:, 1] = refined_pose[:, 7] # position 7
+        pose_shift = refined_pose[:, :2] # 0, 1
+        pose_yaw = refined_pose[:, 3] # 3
+        pose_bbox = refined_pose[:, 4:7] # 4, 5, 6
+        refined_pose_param = nn.Parameter(refined_pose_chosen, requires_grad=True)
+        
+        optim_refined = self._init_refinement_optimizer(refined_pose_param, lr=self.ref_lr)
+
+        z_list = torch.zeros(self.num_refinement_steps)
+        fill_factor_list = torch.zeros(self.num_refinement_steps)
+        grad_z_list = torch.zeros(self.num_refinement_steps)
+        grad_fill_factor_list = torch.zeros(self.num_refinement_steps)
+        loss_list = torch.zeros(self.num_refinement_steps)
+        tv_loss_list = torch.zeros(self.num_refinement_steps)
+        gen_image_list = torch.zeros_like(input_patches).repeat(self.num_refinement_steps, 1, 1, 1)
+        # Run K iter refinement steps
+        for k in range(self.num_refinement_steps):
+            refined_z_param = refined_pose_param[:, 0]
+            refined_fill_factor_param = refined_pose_param[:, 1]
+            pose_shift = pose_shift.squeeze()
+            pose_bbox = pose_bbox.squeeze()
+            refined_pose_param_with_rest = torch.cat([pose_shift, refined_z_param, pose_yaw, pose_bbox, refined_fill_factor_param], dim=-1)
+            refined_pose_param_with_rest = refined_pose_param_with_rest.unsqueeze(0)
+            dec_pose = torch.cat([refined_pose_param_with_rest, obj_class], dim=-1)
+            
+            z_list[k] = refined_pose_param[:, 0].clone().squeeze()
+            fill_factor_list[k] = refined_pose_param[:, 1].clone().squeeze()
+            optim_refined.zero_grad()
+            gen_pose = dec_pose
+            gen_image = self.decode(z_obj, gen_pose)
+            
+            rec_loss = self.loss._get_rec_loss(rgb_inputs=input_patches, 
+                                                rgb_inputs_cropped=None, 
+                                                rgb_reconstructions=gen_image, 
+                                                rgb_reconstructions_cropped=None,
+                                                use_pixel_loss=True).mean()
+            tv_loss = self._get_tv_loss(gen_image, weight=self.tv_loss_weight)
+            refinement_loss = rec_loss + tv_loss
+            refinement_loss.backward()
+            optim_refined.step()
+            
+            grad_z_list[k] = refined_pose_param.grad[:, 0].clone().squeeze()
+            grad_fill_factor_list[k] = refined_pose_param.grad[:, 1].clone().squeeze()
+            loss_list[k] = refinement_loss.clone().squeeze()
+            tv_loss_list[k] = tv_loss.clone().squeeze().detach()
+            gen_image_list[k] = gen_image.clone().detach()
+        
+        refined_z_param = refined_pose_param[:, 0]
+        refined_fill_factor_param = refined_pose_param[:, 1]
+        refined_pose = torch.cat([pose_shift, refined_z_param, pose_yaw, pose_bbox, refined_fill_factor_param], dim=-1)
+        if refined_pose.dim() == 1:
+            refined_pose = refined_pose.unsqueeze(0)
+        dec_pose = torch.cat([refined_pose, obj_class], dim=-1)   
+        return dec_pose.data, gen_image, z_list, fill_factor_list, grad_z_list, grad_fill_factor_list, loss_list, tv_loss_list, gen_image_list
